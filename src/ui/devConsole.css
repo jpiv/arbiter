@@ -1,0 +1,171 @@
+/* Dev console: a right-docked overlay for inspecting live game state. Mirrors
+   the agent panel's look, but anchored to the opposite side so the two
+   launchers and panels never overlap. */
+
+.dev-root {
+  --dev-bg: rgba(12, 18, 32, 0.94);
+  --dev-border: rgba(107, 122, 153, 0.45);
+  --dev-muted: #aeb8cc;
+  --dev-text: #f6f7fb;
+  position: fixed;
+  inset: 0;
+  pointer-events: none; /* only the panel + launcher are interactive */
+  z-index: 20;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Floating button that opens the console. */
+.dev-launcher {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--dev-border);
+  border-radius: 999px;
+  background: var(--dev-bg);
+  color: var(--dev-text);
+  font: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  pointer-events: auto;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  transition: transform 0.12s ease, border-color 0.12s ease, opacity 0.15s ease;
+}
+.dev-launcher:hover {
+  transform: translateY(-1px);
+  border-color: rgba(142, 202, 230, 0.8);
+}
+.dev-launcher .dev-launcher-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e9c46a;
+  box-shadow: 0 0 8px #e9c46a;
+}
+.dev-root[data-open='true'] .dev-launcher {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The panel itself. */
+.dev-panel {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--dev-border);
+  border-radius: 14px;
+  background: var(--dev-bg);
+  color: var(--dev-text);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+  overflow: hidden;
+  transform: translateX(calc(100% + 24px));
+  opacity: 0;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.dev-root[data-open='true'] .dev-panel {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+.dev-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--dev-border);
+}
+.dev-header-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+.dev-header-title {
+  font-size: 16px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dev-header-sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dev-muted);
+}
+
+/* Segmented JSON / Prompt toggle. */
+.dev-tabs {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--dev-border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.dev-tab {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dev-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.dev-tab:hover {
+  color: var(--dev-text);
+}
+.dev-tab.is-active {
+  background: #3f6fb5;
+  color: #f6f7fb;
+}
+
+.dev-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dev-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dev-icon-btn:hover {
+  color: var(--dev-text);
+  border-color: var(--dev-border);
+}
+.dev-icon-btn.is-flash {
+  color: #6ee7a8;
+  border-color: rgba(110, 231, 168, 0.6);
+}
+
+/* State dump. */
+.dev-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 14px 16px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #d7e0f2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
