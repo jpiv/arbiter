@@ -46,6 +46,7 @@ export class AgentPanel {
   private backBtn!: HTMLButtonElement;
   private roster!: HTMLDivElement;
   private messagesEl!: HTMLDivElement;
+  private composer!: HTMLDivElement;
   private input!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
 
@@ -98,6 +99,7 @@ export class AgentPanel {
     this.messagesEl = el('div', 'agent-messages');
 
     const composer = el('div', 'agent-composer');
+    this.composer = composer;
     this.input = document.createElement('textarea');
     this.input.className = 'agent-input';
     this.input.rows = 1;
@@ -123,6 +125,24 @@ export class AgentPanel {
     chat.append(this.messagesEl, composer);
     panel.append(header, this.roster, chat);
     this.root.append(launcher, panel);
+
+    // Clicking anywhere outside the composer should blur the input. The browser
+    // does this for free when the click lands on a DOM element, but a click on
+    // the Phaser canvas (the map) doesn't steal focus: Phaser calls
+    // preventDefault() on canvas pointer-downs, which suppresses the default
+    // focus shift and leaves the textarea focused. Blur it ourselves on any
+    // pointer-down that isn't inside the composer. Capture phase so it fires
+    // regardless of what downstream handlers do, and doesn't disturb the click.
+    document.addEventListener(
+      'pointerdown',
+      (event) => {
+        if (document.activeElement !== this.input) return;
+        const target = event.target as Node | null;
+        if (target && this.composer.contains(target)) return;
+        this.input.blur();
+      },
+      true,
+    );
   }
 
   // ---- open / close / navigation -------------------------------------------
