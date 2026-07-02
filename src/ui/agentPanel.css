@@ -231,18 +231,6 @@
   border: 1px solid var(--agent-border);
   border-bottom-left-radius: 4px;
 }
-/* Muted "thinking" preview streamed from a reasoning model before the answer. */
-.agent-msg-think {
-  font-size: 12px;
-  font-style: italic;
-  color: var(--agent-muted);
-  opacity: 0.85;
-  line-height: 1.4;
-  margin-bottom: 6px;
-  padding-left: 8px;
-  border-left: 2px solid var(--agent-border);
-  white-space: pre-wrap;
-}
 .agent-msg-error {
   align-self: stretch;
   max-width: 100%;

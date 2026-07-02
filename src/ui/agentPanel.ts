@@ -208,13 +208,11 @@ export class AgentPanel {
     const assistantMessage: ChatMessage = { role: 'assistant', content: '' };
     history.push(assistantMessage);
 
-    // The live assistant bubble has two parts: a muted "thinking" area that shows
-    // reasoning tokens as they stream, and the answer text below it.
+    // The live assistant bubble holds the streamed answer text. Reasoning tokens
+    // from a thinking model are consumed but not shown (see onReasoning below).
     const bubble = el('div', 'agent-msg agent-msg-assistant agent-msg-streaming');
-    const thinkEl = el('div', 'agent-msg-think');
-    thinkEl.style.display = 'none';
     const answerEl = el('span', 'agent-msg-answer');
-    bubble.append(thinkEl, answerEl);
+    bubble.append(answerEl);
     this.messagesEl.appendChild(bubble);
     this.scrollToBottom();
 
@@ -229,7 +227,6 @@ export class AgentPanel {
       if (assistantMessage.content) return;
       if (reasoning) {
         assistantMessage.content = reasoning;
-        thinkEl.style.display = 'none';
         answerEl.textContent = reasoning;
       } else {
         bubble.remove();
@@ -242,14 +239,10 @@ export class AgentPanel {
       { system: agent.systemPrompt, messages: history.slice(0, -1) },
       {
         onReasoning: (chunk) => {
+          // Kept only so a reasoning-only reply can fall back to it; never shown.
           reasoning += chunk;
-          thinkEl.style.display = '';
-          thinkEl.textContent = reasoning;
-          this.scrollToBottom();
         },
         onDelta: (chunk) => {
-          // First answer token means thinking is done — tuck the reasoning away.
-          if (!assistantMessage.content) thinkEl.style.display = 'none';
           assistantMessage.content += chunk;
           answerEl.textContent = assistantMessage.content;
           this.scrollToBottom();
