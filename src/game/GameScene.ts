@@ -75,6 +75,11 @@ const STATS_PANEL_WIDTH = 246;
 const STATS_PANEL_HEIGHT = 144;
 const HUD_MARGIN = 24;
 
+// The player's resource readout, pinned top-left (opposite the selected-unit
+// panel). One line per resource kind under a title.
+const RESOURCE_PANEL_WIDTH = 220;
+const RESOURCE_PANEL_HEIGHT = 72;
+
 // A unit's `speed` stat is interpreted as this many tiles travelled per second.
 const SPEED_TILES_PER_SEC = 0.5;
 // How often an in-range unit lands a hit on a base (milliseconds).
@@ -113,6 +118,7 @@ export class GameScene extends Phaser.Scene implements GameContext {
   private selectedUnitBody?: Phaser.GameObjects.Arc;
   private selectedUnitMarker?: Phaser.GameObjects.Arc;
   private statsPanelText?: Phaser.GameObjects.Text;
+  private resourcePanelText?: Phaser.GameObjects.Text;
   private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd?: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
   private zoomInKey?: Phaser.Input.Keyboard.Key;
@@ -413,6 +419,7 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.selectedUnitBody = undefined;
     this.selectedUnitMarker = undefined;
     this.statsPanelText = undefined;
+    this.resourcePanelText = undefined;
 
     const { width, height } = this.scale.gameSize;
     this.uiCamera?.setSize(width, height);
@@ -425,6 +432,7 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.gameState.getResourceNodes().forEach((node) => this.drawResourceNode(node));
     this.gameState.getUnits().forEach((unit) => this.drawUnit(unit));
     this.drawStatsPanel();
+    this.drawResourcePanel();
     this.applyCameraLayers();
 
     if (this.selectedUnitId) {
@@ -567,6 +575,43 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.registerHud(this.statsPanelText);
   }
 
+  // The human player's resource stockpile, pinned top-left. Its text is refreshed
+  // every frame from the PlayerRegistry (see refreshResourcePanel) so it ticks up
+  // live as a Collector gathers.
+  private drawResourcePanel(): void {
+    const x = HUD_MARGIN;
+    const y = HUD_MARGIN;
+
+    this.registerHud(
+      this.add.rectangle(x, y, RESOURCE_PANEL_WIDTH, RESOURCE_PANEL_HEIGHT, 0x0f172a, 0.9).setOrigin(0).setStrokeStyle(1, 0x6b7a99, 0.6),
+      this.add.text(x + 16, y + 14, 'Resources', this.getLabelStyle('#f6f7fb', '18px')),
+    );
+    this.resourcePanelText = this.add.text(x + 16, y + 44, '', {
+      color: '#dbe7ff',
+      fontFamily: 'Inter, system-ui, sans-serif',
+      fontSize: '14px',
+      lineSpacing: 6,
+    });
+    this.registerHud(this.resourcePanelText);
+    this.refreshResourcePanel();
+  }
+
+  // Repaint the resource readout from the human player's current stockpile — one
+  // "Resource 1: N" line per kind. Cheap enough to call each frame; a no-op if the
+  // panel hasn't been built yet (e.g. mid-relayout).
+  private refreshResourcePanel(): void {
+    if (!this.resourcePanelText) return;
+    const resources = this.players.getResources(this.humanPlayerId);
+    if (!resources) {
+      this.resourcePanelText.setText('None');
+      return;
+    }
+    const lines = Object.entries(resources).map(
+      ([kind, amount]) => `${resourceDisplayName(kind as ResourceKind)}: ${amount}`,
+    );
+    this.resourcePanelText.setText(lines.length ? lines : 'None');
+  }
+
   // Mark objects as HUD: pinned on screen (scroll factor 0) and, via
   // applyCameraLayers, rendered by the fixed-zoom UI camera instead of the world.
   private registerHud(...objects: Phaser.GameObjects.GameObject[]): void {
@@ -646,6 +691,7 @@ export class GameScene extends Phaser.Scene implements GameContext {
     // so the player can survey the map; only the battle sim is gated on `running`.
     this.updatePan(delta);
     this.updateZoom(delta);
+    this.refreshResourcePanel();
     if (!this.running) return;
 
     this.gameState.getUnits().forEach((unit) => {
@@ -877,6 +923,16 @@ function resourceLabel(resource: ResourceKind): string {
   switch (resource) {
     case ResourceKind.Resource1:
       return 'R1';
+    default:
+      return resource;
+  }
+}
+
+// Human-friendly name for the resource HUD, e.g. resource1 -> "Resource 1".
+function resourceDisplayName(resource: ResourceKind): string {
+  switch (resource) {
+    case ResourceKind.Resource1:
+      return 'Resource 1';
     default:
       return resource;
   }
