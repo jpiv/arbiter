@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { BaseState, Faction, GameMap, GridPoint, TerrainKind, UnitRole, UnitState, WorldState, prototypeWorld } from './world';
 import { AttackTarget, GameContext, GameInterface, GameToolset } from './actions';
+import { GameState } from './state';
 
 interface BaseColors {
   fill: number;
@@ -14,15 +15,6 @@ interface UnitView {
   initial: Phaser.GameObjects.Text;
   roleLabel: Phaser.GameObjects.Text;
   radius: number;
-}
-
-// Movement/combat state for a unit. Lives in grid-space so it is independent of
-// tile size, and persists across layout rebuilds (unlike the visuals above).
-interface UnitRuntime {
-  cx: number; // fractional grid coordinate of the unit's center (x)
-  cy: number; // fractional grid coordinate of the unit's center (y)
-  targetBase?: BaseState;
-  attackTimer: number;
 }
 
 interface BaseView {
@@ -63,9 +55,13 @@ const PAN_KEY_SPEED = 900; // pixels/sec for keyboard + edge-scroll panning
 const EDGE_SCROLL_MARGIN = 28; // px band at each screen edge that triggers a pan
 
 export class GameScene extends Phaser.Scene implements GameContext {
-  private readonly world: WorldState;
+  // The single source of truth for game state. The scene reads/writes through
+  // it and it is the object that serializes into LLM context.
+  private readonly gameState: GameState;
   private readonly unitViews = new Map<string, UnitView>();
-  private readonly unitRuntime = new Map<string, UnitRuntime>();
+  // Per-unit attack cooldown (ms remaining until the next hit). Purely a sim
+  // cadence detail, so it lives here rather than in the shared GameState.
+  private readonly attackTimers = new Map<string, number>();
   private readonly baseViews = new Map<string, BaseView>();
   private tileSize = 0;
   private originX = 0;
@@ -93,33 +89,31 @@ export class GameScene extends Phaser.Scene implements GameContext {
 
   constructor(world: WorldState = prototypeWorld) {
     super('GameScene');
-    this.world = world;
+    this.gameState = new GameState(world);
+  }
+
+  /** The shared game state, for other parts of the app (HUD, LLM context, …). */
+  getState(): GameState {
+    return this.gameState;
   }
 
   // --- GameContext: the bridge the action layer calls into ------------------
 
   getUnit(unitId: string): UnitState | undefined {
-    return this.world.units.find((unit) => unit.id === unitId);
+    return this.gameState.getUnit(unitId);
   }
 
   getAttackTarget(targetId: string): AttackTarget | undefined {
     // Only bases are attackable in the current sim; units become targets once
     // the update loop supports unit-vs-unit combat.
-    const base = this.findBase(targetId);
+    const base = this.gameState.getBase(targetId);
     return base ? { id: base.id, name: base.name, kind: 'base' } : undefined;
   }
 
   issueAttackOrder(unitId: string, targetId: string): void {
-    const runtime = this.unitRuntime.get(unitId);
-    const base = this.findBase(targetId);
-    if (!runtime || !base) return;
-
-    runtime.targetBase = base;
-    runtime.attackTimer = 0;
-  }
-
-  private findBase(baseId: string): BaseState | undefined {
-    return [this.world.base, this.world.enemyBase].find((base) => base.id === baseId);
+    this.gameState.orderAttack(unitId, targetId);
+    // Reset the cooldown so an in-range unit lands its first hit immediately.
+    this.attackTimers.set(unitId, 0);
   }
 
   create(): void {
@@ -129,11 +123,13 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.layout();
 
     // Start looking at the player's own base rather than the map's top-left corner.
-    const base = this.world.base;
-    this.cameras.main.centerOn(
-      (base.position.x + base.size.x / 2) * this.tileSize,
-      (base.position.y + base.size.y / 2) * this.tileSize,
-    );
+    const base = this.gameState.getBases().find((candidate) => candidate.faction === Faction.Player);
+    if (base) {
+      this.cameras.main.centerOn(
+        (base.position.x + base.size.x / 2) * this.tileSize,
+        (base.position.y + base.size.y / 2) * this.tileSize,
+      );
+    }
 
     this.scale.on(Phaser.Scale.Events.RESIZE, this.layout, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -188,8 +184,9 @@ export class GameScene extends Phaser.Scene implements GameContext {
   }
 
   // Rebuild the whole scene sized to the current viewport. Called on create and
-  // on every window resize so the map always fills the window. Unit movement and
-  // combat state (unitRuntime) survives across rebuilds; only visuals are recreated.
+  // on every window resize so the map always fills the window. Game state
+  // (positions, orders, health) lives in GameState and survives across
+  // rebuilds; only visuals are recreated.
   private layout(): void {
     this.children.removeAll(true);
     this.unitViews.clear();
@@ -198,22 +195,17 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.selectedUnitMarker = undefined;
     this.statsPanelText = undefined;
 
-    this.computeMetrics(this.world.map);
-    this.cameras.main.setBounds(
-      0,
-      0,
-      this.world.map.columns * this.tileSize,
-      this.world.map.rows * this.tileSize,
-    );
-    this.drawMap(this.world.map);
-    this.drawBase(this.world.base);
-    this.drawBase(this.world.enemyBase);
-    this.world.units.forEach((unit) => this.drawUnit(unit));
+    const map = this.gameState.getMap();
+    this.computeMetrics(map);
+    this.cameras.main.setBounds(0, 0, map.columns * this.tileSize, map.rows * this.tileSize);
+    this.drawMap(map);
+    this.gameState.getBases().forEach((base) => this.drawBase(base));
+    this.gameState.getUnits().forEach((unit) => this.drawUnit(unit));
     this.drawHud();
     this.drawStatsPanel();
 
     if (this.selectedUnitId) {
-      const unit = this.world.units.find((candidate) => candidate.id === this.selectedUnitId);
+      const unit = this.gameState.getUnit(this.selectedUnitId);
       if (unit) this.selectUnit(unit);
       else this.selectedUnitId = undefined;
     }
@@ -266,14 +258,11 @@ export class GameScene extends Phaser.Scene implements GameContext {
   }
 
   private drawUnit(unit: UnitState): void {
-    let runtime = this.unitRuntime.get(unit.id);
-    if (!runtime) {
-      runtime = { cx: unit.position.x + 0.5, cy: unit.position.y + 0.5, attackTimer: 0 };
-      this.unitRuntime.set(unit.id, runtime);
-    }
+    const pos = this.gameState.getUnitPosition(unit.id);
+    if (!pos) return;
 
-    const px = this.originX + runtime.cx * this.tileSize;
-    const py = this.originY + runtime.cy * this.tileSize;
+    const px = this.originX + pos.x * this.tileSize;
+    const py = this.originY + pos.y * this.tileSize;
     const radius = this.tileSize * 0.28;
     const role = unit.config.role;
 
@@ -343,15 +332,15 @@ export class GameScene extends Phaser.Scene implements GameContext {
 
   private selectUnit(unit: UnitState): void {
     const view = this.unitViews.get(unit.id);
-    const runtime = this.unitRuntime.get(unit.id);
-    if (!view || !runtime) return;
+    const pos = this.gameState.getUnitPosition(unit.id);
+    if (!view || !pos) return;
 
     this.selectedUnitBody?.setStrokeStyle(3, 0x0a1020, 0.8);
     this.selectedUnitId = unit.id;
     this.selectedUnitBody = view.body;
 
-    const px = this.originX + runtime.cx * this.tileSize;
-    const py = this.originY + runtime.cy * this.tileSize;
+    const px = this.originX + pos.x * this.tileSize;
+    const py = this.originY + pos.y * this.tileSize;
 
     this.selectedUnitMarker?.destroy();
     this.selectedUnitMarker = this.add.circle(px, py, view.radius + 8, 0xffffff, 0).setStrokeStyle(3, 0xf6f7fb, 0.95);
@@ -379,32 +368,39 @@ export class GameScene extends Phaser.Scene implements GameContext {
   update(_time: number, delta: number): void {
     this.updatePan(delta);
 
-    this.world.units.forEach((unit) => {
-      const runtime = this.unitRuntime.get(unit.id);
-      if (!runtime || !runtime.targetBase) return;
+    this.gameState.getUnits().forEach((unit) => {
+      const order = this.gameState.getUnitOrder(unit.id);
+      if (order.kind !== 'attack') return;
 
-      const base = runtime.targetBase;
+      const base = this.gameState.getBase(order.targetId);
+      const pos = this.gameState.getUnitPosition(unit.id);
+      if (!base || !pos) return;
+
+      if (base.health <= 0) {
+        this.gameState.clearOrder(unit.id);
+        return;
+      }
+
       const left = base.position.x;
       const top = base.position.y;
       const right = base.position.x + base.size.x;
       const bottom = base.position.y + base.size.y;
 
       // Nearest point on the base's footprint, in grid units.
-      const nearestX = Phaser.Math.Clamp(runtime.cx, left, right);
-      const nearestY = Phaser.Math.Clamp(runtime.cy, top, bottom);
-      const dx = nearestX - runtime.cx;
-      const dy = nearestY - runtime.cy;
+      const nearestX = Phaser.Math.Clamp(pos.x, left, right);
+      const nearestY = Phaser.Math.Clamp(pos.y, top, bottom);
+      const dx = nearestX - pos.x;
+      const dy = nearestY - pos.y;
       const distance = Math.hypot(dx, dy);
       const range = unit.config.stats.range;
 
       if (distance > range) {
         const step = unit.config.stats.speed * SPEED_TILES_PER_SEC * (delta / 1000);
         const travel = Math.min(step, distance - range);
-        runtime.cx += (dx / distance) * travel;
-        runtime.cy += (dy / distance) * travel;
+        this.gameState.setUnitPosition(unit.id, pos.x + (dx / distance) * travel, pos.y + (dy / distance) * travel);
         this.updateUnitPosition(unit.id);
       } else {
-        this.attackBase(unit, runtime, delta);
+        this.attackBase(unit, base, delta);
       }
     });
   }
@@ -441,11 +437,11 @@ export class GameScene extends Phaser.Scene implements GameContext {
 
   private updateUnitPosition(unitId: string): void {
     const view = this.unitViews.get(unitId);
-    const runtime = this.unitRuntime.get(unitId);
-    if (!view || !runtime) return;
+    const pos = this.gameState.getUnitPosition(unitId);
+    if (!view || !pos) return;
 
-    const px = this.originX + runtime.cx * this.tileSize;
-    const py = this.originY + runtime.cy * this.tileSize;
+    const px = this.originX + pos.x * this.tileSize;
+    const py = this.originY + pos.y * this.tileSize;
 
     view.body.setPosition(px, py);
     view.initial.setPosition(px, py - 7);
@@ -455,23 +451,19 @@ export class GameScene extends Phaser.Scene implements GameContext {
     }
   }
 
-  private attackBase(unit: UnitState, runtime: UnitRuntime, delta: number): void {
-    const base = runtime.targetBase;
-    if (!base) return;
-
-    if (base.health <= 0) {
-      runtime.targetBase = undefined;
+  private attackBase(unit: UnitState, base: BaseState, delta: number): void {
+    let timer = (this.attackTimers.get(unit.id) ?? 0) - delta;
+    if (timer > 0) {
+      this.attackTimers.set(unit.id, timer);
       return;
     }
+    timer = ATTACK_INTERVAL_MS;
+    this.attackTimers.set(unit.id, timer);
 
-    runtime.attackTimer -= delta;
-    if (runtime.attackTimer > 0) return;
-    runtime.attackTimer = ATTACK_INTERVAL_MS;
+    const health = this.gameState.damageBase(base.id, unit.config.stats.power);
+    this.baseViews.get(base.id)?.hpText.setText(`HP ${health}`);
 
-    base.health = Math.max(0, base.health - unit.config.stats.power);
-    this.baseViews.get(base.id)?.hpText.setText(`HP ${base.health}`);
-
-    if (base.health <= 0) runtime.targetBase = undefined;
+    if (health <= 0) this.gameState.clearOrder(unit.id);
   }
 
   private tileToWorld(point: GridPoint): GridPoint {
