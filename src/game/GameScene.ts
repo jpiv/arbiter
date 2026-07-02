@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { BaseState, Faction, GameMap, GridPoint, TerrainKind, UnitRole, UnitState, WorldState, prototypeWorld } from './world';
+import { AttackTarget, GameContext, GameInterface, GameToolset } from './actions';
 
 interface BaseColors {
   fill: number;
@@ -56,7 +57,7 @@ const SPEED_TILES_PER_SEC = 0.5;
 // How often an in-range unit lands a hit on a base (milliseconds).
 const ATTACK_INTERVAL_MS = 700;
 
-export class GameScene extends Phaser.Scene {
+export class GameScene extends Phaser.Scene implements GameContext {
   private readonly world: WorldState;
   private readonly unitViews = new Map<string, UnitView>();
   private readonly unitRuntime = new Map<string, UnitRuntime>();
@@ -69,9 +70,42 @@ export class GameScene extends Phaser.Scene {
   private selectedUnitMarker?: Phaser.GameObjects.Arc;
   private statsPanelText?: Phaser.GameObjects.Text;
 
+  // The single interface every action flows through. Human input (below) and
+  // LLM tool calls both invoke actions here.
+  private readonly gameInterface = new GameInterface(this);
+  // LLM tool wrapper around the interface. Not wired to a model yet — this is
+  // the handle future LLM code uses to get tool specs and dispatch tool calls.
+  readonly commandTools = new GameToolset(this.gameInterface);
+
   constructor(world: WorldState = prototypeWorld) {
     super('GameScene');
     this.world = world;
+  }
+
+  // --- GameContext: the bridge the action layer calls into ------------------
+
+  getUnit(unitId: string): UnitState | undefined {
+    return this.world.units.find((unit) => unit.id === unitId);
+  }
+
+  getAttackTarget(targetId: string): AttackTarget | undefined {
+    // Only bases are attackable in the current sim; units become targets once
+    // the update loop supports unit-vs-unit combat.
+    const base = this.findBase(targetId);
+    return base ? { id: base.id, name: base.name, kind: 'base' } : undefined;
+  }
+
+  issueAttackOrder(unitId: string, targetId: string): void {
+    const runtime = this.unitRuntime.get(unitId);
+    const base = this.findBase(targetId);
+    if (!runtime || !base) return;
+
+    runtime.targetBase = base;
+    runtime.attackTimer = 0;
+  }
+
+  private findBase(baseId: string): BaseState | undefined {
+    return [this.world.base, this.world.enemyBase].find((base) => base.id === baseId);
   }
 
   create(): void {
@@ -243,13 +277,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   // Order the currently selected unit to march toward `base` and attack it.
+  // Routed through the game interface so mouse input takes the exact same path
+  // an LLM tool call will.
   private orderAttack(base: BaseState): void {
     if (!this.selectedUnitId) return;
-    const runtime = this.unitRuntime.get(this.selectedUnitId);
-    if (!runtime) return;
-
-    runtime.targetBase = base;
-    runtime.attackTimer = 0;
+    this.gameInterface.invoke('attack', { unitId: this.selectedUnitId, targetId: base.id });
   }
 
   update(_time: number, delta: number): void {
