@@ -1,4 +1,4 @@
-import { Faction, PlayerRecord } from '../world';
+import { Faction, PlayerRecord, PlayerResources, ResourceKind } from '../world';
 import { PlayerSnapshot } from './types';
 
 /**
@@ -21,8 +21,9 @@ export class PlayerRegistry {
   private readonly chatBusy = new Set<string>();
 
   constructor(players: PlayerRecord[]) {
-    // Defensive copy so callers can't mutate our records behind our back.
-    this.players = players.map((player) => ({ ...player }));
+    // Defensive copy so callers can't mutate our records behind our back — the
+    // resources record is nested, so copy that too rather than sharing the ref.
+    this.players = players.map((player) => ({ ...player, resources: { ...player.resources } }));
   }
 
   // --- Reads ----------------------------------------------------------------
@@ -43,6 +44,12 @@ export class PlayerRegistry {
     return this.getPlayer(playerId)?.directive ?? '';
   }
 
+  /** A player's current resource stockpile (a copy), or undefined if no player. */
+  getResources(playerId: string): PlayerResources | undefined {
+    const player = this.getPlayer(playerId);
+    return player ? { ...player.resources } : undefined;
+  }
+
   isChatBusy(playerId: string): boolean {
     return this.chatBusy.has(playerId);
   }
@@ -55,6 +62,18 @@ export class PlayerRegistry {
     if (!player) return false;
     player.directive = directive;
     return true;
+  }
+
+  /**
+   * Add `amount` of `kind` to a player's stockpile (never dropping below 0) and
+   * return the new total, or undefined if there's no such player. This is how a
+   * Collector's gathered resource lands in the owning player's state.
+   */
+  addResource(playerId: string, kind: ResourceKind, amount: number): number | undefined {
+    const player = this.getPlayer(playerId);
+    if (!player) return undefined;
+    player.resources[kind] = Math.max(0, (player.resources[kind] ?? 0) + amount);
+    return player.resources[kind];
   }
 
   /** Mark/unmark a player as currently being driven by the human via chat. */
@@ -73,6 +92,7 @@ export class PlayerRegistry {
       controller: player.controller,
       agentId: player.agentId,
       directive: player.directive,
+      resources: { ...player.resources },
     }));
   }
 
@@ -85,11 +105,19 @@ export class PlayerRegistry {
     const lines: string[] = ['=== Players ==='];
     for (const player of this.players) {
       const directive = player.directive.trim() ? player.directive.trim() : '(none)';
+      const resources = formatResources(player.resources);
       lines.push(
         `- ${player.name} [${player.id}] — ${player.faction}, ${player.controller}-controlled, ` +
-          `agent ${player.agentId} — directive: ${directive}`,
+          `agent ${player.agentId} — resources: ${resources} — directive: ${directive}`,
       );
     }
     return lines.join('\n');
   }
+}
+
+/** Render a stockpile as a compact "resource1 12" list, or "none" when empty. */
+function formatResources(resources: PlayerResources): string {
+  const entries = Object.entries(resources);
+  if (entries.length === 0) return 'none';
+  return entries.map(([kind, amount]) => `${kind} ${amount}`).join(', ');
 }
