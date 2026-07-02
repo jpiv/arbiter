@@ -27,8 +27,33 @@ const UNIT_COLORS: Record<UnitRole, number> = {
 
 const MAP_PADDING = 24;
 
+// A unit's `speed` stat is interpreted as this many tiles travelled per second.
+const SPEED_TILES_PER_SEC = 0.5;
+// How often an in-range unit lands a hit on a base (milliseconds).
+const ATTACK_INTERVAL_MS = 700;
+
+interface UnitView {
+  unit: UnitState;
+  body: Phaser.GameObjects.Arc;
+  initial: Phaser.GameObjects.Text;
+  roleLabel: Phaser.GameObjects.Text;
+  radius: number;
+  x: number;
+  y: number;
+  targetBase?: BaseState;
+  attackTimer: number;
+}
+
+interface BaseView {
+  base: BaseState;
+  hpText: Phaser.GameObjects.Text;
+  bounds: { left: number; top: number; right: number; bottom: number };
+}
+
 export class GameScene extends Phaser.Scene {
   private readonly world: WorldState;
+  private readonly unitViews = new Map<string, UnitView>();
+  private readonly baseViews = new Map<string, BaseView>();
   private selectedUnit?: UnitState;
   private selectedUnitBody?: Phaser.GameObjects.Arc;
   private selectedUnitMarker?: Phaser.GameObjects.Arc;
@@ -41,6 +66,7 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     this.cameras.main.setBackgroundColor('#080d15');
+    this.input.mouse?.disableContextMenu();
     this.drawMap(this.world.map);
     this.drawBase(this.world.map, this.world.base);
     this.drawBase(this.world.map, this.world.enemyBase);
@@ -68,14 +94,25 @@ export class GameScene extends Phaser.Scene {
     const height = base.size.y * map.tileSize;
     const colors = BASE_COLORS[base.faction];
 
-    this.add
+    const rect = this.add
       .rectangle(position.x, position.y, width, height, colors.fill, 0.92)
       .setOrigin(0)
-      .setStrokeStyle(3, colors.stroke, 0.86);
+      .setStrokeStyle(3, colors.stroke, 0.86)
+      .setInteractive(new Phaser.Geom.Rectangle(0, 0, width, height), Phaser.Geom.Rectangle.Contains);
 
     this.add.rectangle(position.x + width / 2, position.y + height / 2, width - 34, height - 34, colors.inner, 0.78);
     this.add.text(position.x + 16, position.y + 14, base.name, this.getLabelStyle('#f6f7fb', '18px'));
-    this.add.text(position.x + 16, position.y + 42, `HP ${base.health}`, this.getLabelStyle('#c8d8f3', '13px'));
+    const hpText = this.add.text(position.x + 16, position.y + 42, `HP ${base.health}`, this.getLabelStyle('#c8d8f3', '13px'));
+
+    this.baseViews.set(base.id, {
+      base,
+      hpText,
+      bounds: { left: position.x, top: position.y, right: position.x + width, bottom: position.y + height },
+    });
+
+    rect.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.rightButtonDown()) this.orderAttack(base);
+    });
   }
 
   private drawUnit(map: GameMap, unit: UnitState): void {
@@ -88,18 +125,28 @@ export class GameScene extends Phaser.Scene {
       .setStrokeStyle(3, 0x0a1020, 0.8)
       .setInteractive({ useHandCursor: true });
 
-    body.on('pointerdown', () => this.selectUnit(unit, center, radius, body));
+    const initial = this.add
+      .text(center.x, center.y - 7, this.getUnitInitial(unit), this.getLabelStyle('#08111f', '16px'))
+      .setOrigin(0.5);
+    const roleLabel = this.add
+      .text(center.x, center.y + radius + 8, role, this.getLabelStyle('#dbe7ff', '12px'))
+      .setOrigin(0.5, 0);
+
+    const view: UnitView = { unit, body, initial, roleLabel, radius, x: center.x, y: center.y, attackTimer: 0 };
+    this.unitViews.set(unit.id, view);
+
+    body.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.rightButtonDown()) return;
+      this.selectUnit(view);
+    });
     body.on('pointerover', () => body.setStrokeStyle(3, 0xf6f7fb, 0.9));
     body.on('pointerout', () => {
       if (this.selectedUnit?.id !== unit.id) body.setStrokeStyle(3, 0x0a1020, 0.8);
     });
-
-    this.add.text(center.x, center.y - 7, this.getUnitInitial(unit), this.getLabelStyle('#08111f', '16px')).setOrigin(0.5);
-    this.add.text(center.x, center.y + radius + 8, role, this.getLabelStyle('#dbe7ff', '12px')).setOrigin(0.5, 0);
   }
 
   private drawHud(): void {
-    this.add.text(24, 516, 'Click a unit to inspect prototype combat stats.', this.getLabelStyle('#aeb8cc', '14px'));
+    this.add.text(24, 516, 'Click a unit to select it, then right-click a base to march in and attack.', this.getLabelStyle('#aeb8cc', '14px'));
   }
 
   private drawStatsPanel(): void {
@@ -118,22 +165,85 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private selectUnit(unit: UnitState, center: GridPoint, radius: number, body: Phaser.GameObjects.Arc): void {
+  private selectUnit(view: UnitView): void {
     this.selectedUnitBody?.setStrokeStyle(3, 0x0a1020, 0.8);
-    this.selectedUnit = unit;
-    this.selectedUnitBody = body;
+    this.selectedUnit = view.unit;
+    this.selectedUnitBody = view.body;
     this.selectedUnitMarker?.destroy();
-    this.selectedUnitMarker = this.add.circle(center.x, center.y, radius + 8, 0xffffff, 0).setStrokeStyle(3, 0xf6f7fb, 0.95);
-    body.setStrokeStyle(3, 0xf6f7fb, 0.95);
+    this.selectedUnitMarker = this.add.circle(view.x, view.y, view.radius + 8, 0xffffff, 0).setStrokeStyle(3, 0xf6f7fb, 0.95);
+    view.body.setStrokeStyle(3, 0xf6f7fb, 0.95);
 
-    const { stats } = unit.config;
+    const { stats } = view.unit.config;
 
     this.statsPanelText?.setText([
-      `${unit.name} - ${unit.config.role}`,
+      `${view.unit.name} - ${view.unit.config.role}`,
       `Speed: ${stats.speed}`,
+      `Range: ${stats.range}`,
       `HP: ${stats.hp}`,
       `Power: ${stats.power}`,
     ]);
+  }
+
+  private orderAttack(base: BaseState): void {
+    if (!this.selectedUnit) return;
+    const view = this.unitViews.get(this.selectedUnit.id);
+    if (!view) return;
+
+    view.targetBase = base;
+    view.attackTimer = 0;
+  }
+
+  update(_time: number, delta: number): void {
+    const tileSize = this.world.map.tileSize;
+
+    this.unitViews.forEach((view) => {
+      if (!view.targetBase) return;
+      const baseView = this.baseViews.get(view.targetBase.id);
+      if (!baseView) return;
+
+      const { left, top, right, bottom } = baseView.bounds;
+      const nearestX = Phaser.Math.Clamp(view.x, left, right);
+      const nearestY = Phaser.Math.Clamp(view.y, top, bottom);
+      const dx = nearestX - view.x;
+      const dy = nearestY - view.y;
+      const distance = Math.hypot(dx, dy);
+      const rangePx = view.unit.config.stats.range * tileSize;
+
+      if (distance > rangePx) {
+        const stepPx = view.unit.config.stats.speed * SPEED_TILES_PER_SEC * tileSize * (delta / 1000);
+        const travel = Math.min(stepPx, distance - rangePx);
+        view.x += (dx / distance) * travel;
+        view.y += (dy / distance) * travel;
+        this.updateUnitPosition(view);
+      } else {
+        this.attackBase(view, baseView, delta);
+      }
+    });
+  }
+
+  private updateUnitPosition(view: UnitView): void {
+    view.body.setPosition(view.x, view.y);
+    view.initial.setPosition(view.x, view.y - 7);
+    view.roleLabel.setPosition(view.x, view.y + view.radius + 8);
+    if (this.selectedUnit?.id === view.unit.id) {
+      this.selectedUnitMarker?.setPosition(view.x, view.y);
+    }
+  }
+
+  private attackBase(view: UnitView, baseView: BaseView, delta: number): void {
+    if (baseView.base.health <= 0) {
+      view.targetBase = undefined;
+      return;
+    }
+
+    view.attackTimer -= delta;
+    if (view.attackTimer > 0) return;
+    view.attackTimer = ATTACK_INTERVAL_MS;
+
+    baseView.base.health = Math.max(0, baseView.base.health - view.unit.config.stats.power);
+    baseView.hpText.setText(`HP ${baseView.base.health}`);
+
+    if (baseView.base.health <= 0) view.targetBase = undefined;
   }
 
   private tileToWorld(map: GameMap, point: GridPoint): GridPoint {
