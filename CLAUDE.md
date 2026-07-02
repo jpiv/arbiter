@@ -44,3 +44,41 @@ and conventions.
   two. Copy `.env` into each worktree (it isn't carried over by `git worktree add`).
 - Typecheck / build with `npm run typecheck` and `npm run build` (both run `tsc`).
 - Don't push to a remote unless the user explicitly asks.
+
+## Game actions: everything goes through the single action interface
+
+All gameplay actions live behind one interface in `src/game/actions/`, built so an
+LLM can drive the game via tool calls. **Any new action an agent or player can
+take (attack, move, build, …) must be added as a `GameAction` and registered
+there** — never scatter action logic across the scene or input handlers.
+
+The layering (see `src/game/actions/`):
+
+```
+LLM tools → GameToolset (wrapper) → GameInterface (single door) → action defs → GameContext → GameScene
+```
+
+- `GameAction` (`types.ts`) — a self-describing action: `name`, `description`,
+  JSON-schema `parameters`, and `execute(args, ctx) → ActionResult`.
+- `GameContext` (`types.ts`) — the Phaser-agnostic bridge to live game state,
+  implemented by `GameScene`. Actions inspect/mutate the world only through it.
+- `GameInterface` (`GameInterface.ts`) — the single registry + `invoke(name, args)`
+  dispatcher. Every action flows through here; nothing calls action logic directly.
+- `GameToolset` (`GameToolset.ts`) — wraps the interface as LLM tool specs
+  (`specs()`) and a tool-call handler (`call()`).
+
+To add an action:
+
+1. Define a `GameAction` (usually its own file under `src/game/actions/`), with
+   an LLM-readable `description` and `parameters`, and return a descriptive
+   `ActionResult` on both success and failure.
+2. Add any lookup/mutation it needs to `GameContext` and implement it on `GameScene`.
+3. Register it in `ALL_ACTIONS` (`GameInterface.ts`) — it then becomes an LLM tool
+   automatically via `GameToolset`.
+4. Invoke it only through `GameInterface.invoke(...)`, and route the equivalent
+   human input (clicks, keys) through the same call so input and LLM tools share
+   one path.
+
+**Conform to this pattern unless the feature is explicitly a user-only
+interaction** an agent would never invoke — e.g. camera pan, selection
+highlighting, HUD toggles. Those may live directly in the scene/input layer.
