@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { BaseState, Faction, GameMap, GridPoint, TerrainKind, UnitRole, UnitState, WorldState, prototypeWorld } from './world';
 import { AttackTarget, GameContext, GameInterface, GameToolset } from './actions';
-import { GameState, PlayerRegistry } from './state';
+import { GameOutcome, GameState, PlayerRegistry } from './state';
 
 interface BaseColors {
   fill: number;
@@ -103,6 +103,14 @@ export class GameScene extends Phaser.Scene implements GameContext {
   private readonly interfaces = new Map<string, GameInterface>();
   private readonly toolsets = new Map<string, GameToolset>();
 
+  // Match lifecycle. The battle sim only advances while `running` (the world sits
+  // idle behind the start menu until the player begins, and freezes once decided).
+  // `outcome` latches the result so the game-over notification fires exactly once.
+  private running = false;
+  private outcome: GameOutcome | null = null;
+  /** Fired once when the match is decided. The app wires this to the game-over screen. */
+  onGameOver?: (outcome: GameOutcome) => void;
+
   constructor(world: WorldState = prototypeWorld) {
     super('GameScene');
     this.gameState = new GameState(world);
@@ -123,6 +131,15 @@ export class GameScene extends Phaser.Scene implements GameContext {
   /** The human player's id — what the agent panel and dev console act as. */
   getUserPlayerId(): string {
     return this.humanPlayerId;
+  }
+
+  /**
+   * Begin the battle simulation. The start menu calls this once the player
+   * chooses to play; until then the world is drawn but stays frozen. Safe to call
+   * before the scene has booted — `update` simply starts advancing once it runs.
+   */
+  start(): void {
+    this.running = true;
   }
 
   /** The action interface bound to `playerId`. Cached so a session reuses one door. */
@@ -537,8 +554,11 @@ export class GameScene extends Phaser.Scene implements GameContext {
   }
 
   update(_time: number, delta: number): void {
+    // Camera controls stay live even while the match is idle (menu / game over)
+    // so the player can survey the map; only the battle sim is gated on `running`.
     this.updatePan(delta);
     this.updateZoom(delta);
+    if (!this.running) return;
 
     this.gameState.getUnits().forEach((unit) => {
       const order = this.gameState.getUnitOrder(unit.id);
@@ -546,6 +566,18 @@ export class GameScene extends Phaser.Scene implements GameContext {
       if (order.kind === 'attack') this.advanceAttack(unit, order.targetId, delta);
       else if (order.kind === 'move') this.advanceMove(unit, order.x, order.y, delta);
     });
+
+    const outcome = this.gameState.getOutcome();
+    if (outcome) this.endGame(outcome);
+  }
+
+  // Latch the result, freeze the sim and notify once. Guarded so a decided match
+  // can't fire the callback twice on subsequent frames.
+  private endGame(outcome: GameOutcome): void {
+    if (this.outcome) return;
+    this.outcome = outcome;
+    this.running = false;
+    this.onGameOver?.(outcome);
   }
 
   // Path toward the attack target and start hitting it once within range.

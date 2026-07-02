@@ -1,5 +1,12 @@
 import { ControllerKind, Faction, UnitRole, UnitStats } from '../world';
 
+/**
+ * The decided result of a match: `victory` when every enemy base is destroyed,
+ * `defeat` when every player base is destroyed. A match still in progress has no
+ * outcome (callers use `GameOutcome | null`).
+ */
+export type GameOutcome = 'victory' | 'defeat';
+
 /** What a unit is currently doing. Extend as new orders are added. */
 export type UnitOrder =
   | { kind: 'idle' }
