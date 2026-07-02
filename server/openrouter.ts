@@ -8,11 +8,49 @@ enum ChatRole {
   System = 'system',
   User = 'user',
   Assistant = 'assistant',
+  Tool = 'tool',
 }
 
-interface ChatMessage {
+// A conversation message as the browser sends it. Assistant turns may carry
+// `toolCalls`; `tool` turns carry the `toolCallId` they answer plus the result.
+interface WireToolCall {
+  id: string;
+  name: string;
+  arguments: string;
+}
+interface WireMessage {
   role: ChatRole;
-  content: string;
+  content?: string;
+  toolCalls?: WireToolCall[];
+  toolCallId?: string;
+}
+
+// Translate a browser message into the OpenAI/OpenRouter wire shape. Drops
+// anything that isn't a recognized user/assistant/tool turn.
+function toUpstreamMessages(raw: unknown[]): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const message = entry as WireMessage;
+    const content = typeof message.content === 'string' ? message.content : '';
+
+    if (message.role === ChatRole.User) {
+      out.push({ role: 'user', content });
+    } else if (message.role === ChatRole.Assistant) {
+      const upstream: Record<string, unknown> = { role: 'assistant', content };
+      if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) {
+        upstream.tool_calls = message.toolCalls.map((call) => ({
+          id: call.id,
+          type: 'function',
+          function: { name: call.name, arguments: call.arguments },
+        }));
+      }
+      out.push(upstream);
+    } else if (message.role === ChatRole.Tool) {
+      out.push({ role: 'tool', tool_call_id: message.toolCallId ?? '', content });
+    }
+  }
+  return out;
 }
 
 interface OpenRouterChatResponse {
@@ -94,16 +132,9 @@ app.post('/api/chat', async (request, response) => {
 app.post('/api/chat/stream', async (request, response) => {
   const body = request.body ?? {};
   const system = typeof body.system === 'string' && body.system.trim() ? body.system.trim() : DEFAULT_SYSTEM_PROMPT;
-  const history: ChatMessage[] = Array.isArray(body.messages)
-    ? body.messages
-        .filter(
-          (entry: unknown): entry is ChatMessage =>
-            !!entry &&
-            typeof (entry as ChatMessage).content === 'string' &&
-            ((entry as ChatMessage).role === ChatRole.User || (entry as ChatMessage).role === ChatRole.Assistant),
-        )
-        .map((entry: ChatMessage) => ({ role: entry.role, content: entry.content }))
-    : [];
+  const history = Array.isArray(body.messages) ? toUpstreamMessages(body.messages) : [];
+  // Tool definitions the browser advertises (built from the game's action registry).
+  const tools = Array.isArray(body.tools) && body.tools.length > 0 ? body.tools : undefined;
 
   if (history.length === 0) return response.status(400).json({ error: 'At least one message is required.' });
 
@@ -142,6 +173,7 @@ app.post('/api/chat/stream', async (request, response) => {
         model,
         stream: true,
         messages: [{ role: ChatRole.System, content: system }, ...history],
+        ...(tools ? { tools } : {}),
       }),
       signal: controller.signal,
     });
@@ -176,11 +208,12 @@ app.post('/api/chat/stream', async (request, response) => {
 
         try {
           const parsed = JSON.parse(data) as {
-            choices?: Array<{ delta?: { content?: string; reasoning?: string } }>;
+            choices?: Array<{ delta?: { content?: string; reasoning?: string; tool_calls?: unknown[] } }>;
           };
           const delta = parsed.choices?.[0]?.delta;
           if (delta?.reasoning) send({ reasoning: delta.reasoning });
           if (delta?.content) send({ content: delta.content });
+          if (delta?.tool_calls) send({ toolCall: delta.tool_calls });
         } catch {
           // Ignore non-JSON payloads (comments / partial frames).
         }

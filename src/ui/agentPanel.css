@@ -246,6 +246,22 @@
   margin: auto 0;
   line-height: 1.5;
 }
+/* Compact line reporting a tool the agent ran (an order it issued in the game). */
+.agent-tool-line {
+  align-self: stretch;
+  max-width: 100%;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #cfe3ff;
+  background: rgba(142, 202, 230, 0.1);
+  border: 1px solid rgba(142, 202, 230, 0.3);
+  border-radius: 8px;
+}
+.agent-tool-line-error {
+  color: #ffd9d6;
+  background: rgba(181, 68, 63, 0.16);
+  border-color: rgba(255, 189, 184, 0.45);
+}
 /* Blinking caret shown on the assistant bubble while a reply is streaming. */
 .agent-msg-streaming::after {
   content: '▋';

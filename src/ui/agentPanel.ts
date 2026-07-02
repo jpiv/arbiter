@@ -1,12 +1,26 @@
 import { Agent, AGENTS, agentInitials } from '../agents';
-import { ChatMessage, streamChat } from '../openRouterClient';
+import { runAgent } from '../agentRunner';
+import { ChatMessage } from '../openRouterClient';
+import type { GameToolset } from '../game/actions';
 import './agentPanel.css';
 
+export interface AgentPanelDeps {
+  // The game's tool wrapper — its actions become tools every agent can call.
+  toolset: GameToolset;
+  // Produces the current game-state text injected into the agent's context.
+  buildStateText: () => string;
+  agents?: Agent[];
+}
+
 // Overlay UI listing the player's AI agents and letting them chat with one over a
-// streaming OpenRouter connection. Conversations are kept per agent for the life of
-// the page so switching agents (or closing/reopening the panel) preserves history.
+// streaming OpenRouter connection. Agents can also act in the game: their replies
+// may call the game's tools (move, attack, …), which run against the live state.
+// Conversations are kept per agent for the life of the page so switching agents
+// (or closing/reopening the panel) preserves history.
 export class AgentPanel {
   private readonly agents: Agent[];
+  private readonly toolset: GameToolset;
+  private readonly buildStateText: () => string;
   private readonly conversations = new Map<string, ChatMessage[]>();
 
   private activeAgent?: Agent;
@@ -25,8 +39,10 @@ export class AgentPanel {
   private input!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
 
-  constructor(agents: Agent[] = AGENTS) {
-    this.agents = agents;
+  constructor(deps: AgentPanelDeps) {
+    this.toolset = deps.toolset;
+    this.buildStateText = deps.buildStateText;
+    this.agents = deps.agents ?? AGENTS;
   }
 
   mount(parent: HTMLElement = document.body): void {
@@ -174,7 +190,13 @@ export class AgentPanel {
     }
 
     for (const message of history) {
-      this.appendBubble(message.role, message.content);
+      if (message.role === 'tool') {
+        this.appendToolLineFromResult(message.content);
+      } else if (message.role === 'assistant' && !message.content) {
+        // Pure tool-call turn; the activity is shown by the tool result lines.
+      } else {
+        this.appendBubble(message.role, message.content);
+      }
     }
     this.scrollToBottom();
   }
@@ -197,71 +219,63 @@ export class AgentPanel {
     // Drop the "say hello" placeholder on the first real message.
     if (history.length === 0) this.messagesEl.replaceChildren();
 
-    const userMessage: ChatMessage = { role: 'user', content };
-    history.push(userMessage);
+    history.push({ role: 'user', content });
     this.appendBubble('user', content);
 
     this.input.value = '';
     this.autoGrow();
 
-    // Placeholder assistant turn we stream tokens into.
-    const assistantMessage: ChatMessage = { role: 'assistant', content: '' };
-    history.push(assistantMessage);
-
-    // The live assistant bubble holds the streamed answer text. Reasoning tokens
-    // from a thinking model are consumed but not shown (see onReasoning below).
-    const bubble = el('div', 'agent-msg agent-msg-assistant agent-msg-streaming');
-    const answerEl = el('span', 'agent-msg-answer');
-    bubble.append(answerEl);
-    this.messagesEl.appendChild(bubble);
-    this.scrollToBottom();
-
     this.abortController = new AbortController();
     this.updateSendButton();
 
-    let reasoning = '';
+    // The agent may take several model turns (calling tools between them). Each
+    // turn streams into its own bubble, created lazily on the first answer token
+    // so pure tool-call turns don't leave an empty bubble behind.
+    let bubble: HTMLDivElement | undefined;
+    let answerEl: HTMLSpanElement | undefined;
+    let answer = '';
 
-    // Called when the stream ends with no answer text. If the model only produced
-    // reasoning, promote it to the visible reply; otherwise drop the empty bubble.
-    const settleEmpty = () => {
-      if (assistantMessage.content) return;
-      if (reasoning) {
-        assistantMessage.content = reasoning;
-        answerEl.textContent = reasoning;
-      } else {
-        bubble.remove();
-        const index = history.indexOf(assistantMessage);
-        if (index !== -1) history.splice(index, 1);
-      }
+    const finalizeBubble = () => {
+      if (!bubble) return;
+      bubble.classList.remove('agent-msg-streaming');
+      if (!answer) bubble.remove();
+      bubble = undefined;
+      answerEl = undefined;
+      answer = '';
     };
 
-    void streamChat(
-      { system: agent.systemPrompt, messages: history.slice(0, -1) },
-      {
-        onReasoning: (chunk) => {
-          // Kept only so a reasoning-only reply can fall back to it; never shown.
-          reasoning += chunk;
-        },
-        onDelta: (chunk) => {
-          assistantMessage.content += chunk;
-          answerEl.textContent = assistantMessage.content;
+    void runAgent({
+      system: agent.systemPrompt,
+      buildStateText: this.buildStateText,
+      history,
+      toolset: this.toolset,
+      signal: this.abortController.signal,
+      handlers: {
+        onAnswerDelta: (chunk) => {
+          if (!bubble) {
+            bubble = el('div', 'agent-msg agent-msg-assistant agent-msg-streaming');
+            answerEl = el('span', 'agent-msg-answer');
+            bubble.append(answerEl);
+            this.messagesEl.appendChild(bubble);
+          }
+          answer += chunk;
+          answerEl!.textContent = answer;
           this.scrollToBottom();
         },
-        onDone: () => {
-          bubble.classList.remove('agent-msg-streaming');
-          settleEmpty();
-          this.finishStream();
+        onToolActivity: (activity) => {
+          this.appendToolLine(activity.message || activity.name, activity.ok);
+          this.scrollToBottom();
         },
+        onRoundEnd: () => finalizeBubble(),
+        onDone: () => this.finishStream(),
         onError: (message) => {
-          bubble.classList.remove('agent-msg-streaming');
-          settleEmpty();
+          finalizeBubble();
           this.appendError(message);
           this.scrollToBottom();
           this.finishStream();
         },
       },
-      this.abortController.signal,
-    );
+    });
   }
 
   private cancelStream(): void {
@@ -299,6 +313,28 @@ export class AgentPanel {
     const bubble = el('div', 'agent-msg agent-msg-error');
     bubble.textContent = message;
     this.messagesEl.appendChild(bubble);
+  }
+
+  // A compact line showing a tool the agent ran and its result (e.g. an order it
+  // issued in the game). Failed actions are styled distinctly.
+  private appendToolLine(message: string, ok: boolean): void {
+    const line = el('div', `agent-tool-line${ok ? '' : ' agent-tool-line-error'}`);
+    line.textContent = `⚙ ${message}`;
+    this.messagesEl.appendChild(line);
+  }
+
+  // Re-render a tool line from a stored tool result (JSON `{ ok, message }`).
+  private appendToolLineFromResult(json: string): void {
+    let ok = true;
+    let message = '';
+    try {
+      const parsed = JSON.parse(json) as { ok?: boolean; message?: string };
+      ok = parsed.ok !== false;
+      message = parsed.message ?? '';
+    } catch {
+      // Unparseable result; nothing useful to show.
+    }
+    if (message) this.appendToolLine(message, ok);
   }
 
   private scrollToBottom(): void {
