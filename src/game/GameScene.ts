@@ -56,6 +56,11 @@ const SPEED_TILES_PER_SEC = 0.5;
 // How often an in-range unit lands a hit on a base (milliseconds).
 const ATTACK_INTERVAL_MS = 700;
 
+// Camera panning. The map is larger than the viewport, so the player scrolls
+// the camera to see the rest of it (keyboard, screen-edge push, or mouse drag).
+const PAN_KEY_SPEED = 900; // pixels/sec for keyboard + edge-scroll panning
+const EDGE_SCROLL_MARGIN = 28; // px band at each screen edge that triggers a pan
+
 export class GameScene extends Phaser.Scene {
   private readonly world: WorldState;
   private readonly unitViews = new Map<string, UnitView>();
@@ -68,6 +73,15 @@ export class GameScene extends Phaser.Scene {
   private selectedUnitBody?: Phaser.GameObjects.Arc;
   private selectedUnitMarker?: Phaser.GameObjects.Arc;
   private statsPanelText?: Phaser.GameObjects.Text;
+  private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
+  private wasd?: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
+  private isDragPanning = false;
+  private dragLastX = 0;
+  private dragLastY = 0;
+  // Edge-scroll only once the pointer is genuinely over the canvas, so the
+  // camera doesn't drift on load (pointer defaults to 0,0) or while the mouse
+  // is outside the window.
+  private pointerInWindow = false;
 
   constructor(world: WorldState = prototypeWorld) {
     super('GameScene');
@@ -77,10 +91,65 @@ export class GameScene extends Phaser.Scene {
   create(): void {
     this.cameras.main.setBackgroundColor('#080d15');
     this.input.mouse?.disableContextMenu();
+    this.setupPanControls();
     this.layout();
+
+    // Start looking at the player's own base rather than the map's top-left corner.
+    const base = this.world.base;
+    this.cameras.main.centerOn(
+      (base.position.x + base.size.x / 2) * this.tileSize,
+      (base.position.y + base.size.y / 2) * this.tileSize,
+    );
+
     this.scale.on(Phaser.Scale.Events.RESIZE, this.layout, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.scale.off(Phaser.Scale.Events.RESIZE, this.layout, this);
+    });
+  }
+
+  // Wire up the three ways to pan the camera: arrow/WASD keys and screen-edge
+  // push (polled in update), plus click-and-drag with the middle mouse button.
+  private setupPanControls(): void {
+    const keyboard = this.input.keyboard;
+    if (keyboard) {
+      this.cursors = keyboard.createCursorKeys();
+      this.wasd = keyboard.addKeys({
+        up: Phaser.Input.Keyboard.KeyCodes.W,
+        down: Phaser.Input.Keyboard.KeyCodes.S,
+        left: Phaser.Input.Keyboard.KeyCodes.A,
+        right: Phaser.Input.Keyboard.KeyCodes.D,
+      }) as GameScene['wasd'];
+    }
+
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.middleButtonDown()) return;
+      this.isDragPanning = true;
+      this.dragLastX = pointer.x;
+      this.dragLastY = pointer.y;
+    });
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (!this.isDragPanning) return;
+      const cam = this.cameras.main;
+      cam.scrollX -= pointer.x - this.dragLastX;
+      cam.scrollY -= pointer.y - this.dragLastY;
+      this.dragLastX = pointer.x;
+      this.dragLastY = pointer.y;
+    });
+    const stopDrag = () => {
+      this.isDragPanning = false;
+    };
+    this.input.on('pointerup', stopDrag);
+    this.input.on('pointerupoutside', stopDrag);
+
+    this.input.on(Phaser.Input.Events.POINTER_MOVE, () => {
+      this.pointerInWindow = true;
+    });
+    this.input.on(Phaser.Input.Events.GAME_OVER, () => {
+      this.pointerInWindow = true;
+    });
+    this.input.on(Phaser.Input.Events.GAME_OUT, () => {
+      this.pointerInWindow = false;
+      this.isDragPanning = false;
     });
   }
 
@@ -96,6 +165,12 @@ export class GameScene extends Phaser.Scene {
     this.statsPanelText = undefined;
 
     this.computeMetrics(this.world.map);
+    this.cameras.main.setBounds(
+      0,
+      0,
+      this.world.map.columns * this.tileSize,
+      this.world.map.rows * this.tileSize,
+    );
     this.drawMap(this.world.map);
     this.drawBase(this.world.base);
     this.drawBase(this.world.enemyBase);
@@ -110,12 +185,13 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Fit the fixed-aspect grid into the viewport with square tiles, centered.
+  // Draw the map at a fixed tile size anchored at the world origin. The map is
+  // intentionally larger than the viewport; the camera (see setupPanControls)
+  // scrolls over it rather than everything being scaled to fit.
   private computeMetrics(map: GameMap): void {
-    const { width, height } = this.scale.gameSize;
-    this.tileSize = Math.min(width / map.columns, height / map.rows);
-    this.originX = (width - this.tileSize * map.columns) / 2;
-    this.originY = (height - this.tileSize * map.rows) / 2;
+    this.tileSize = map.tileSize;
+    this.originX = 0;
+    this.originY = 0;
   }
 
   private drawMap(map: GameMap): void {
@@ -193,26 +269,42 @@ export class GameScene extends Phaser.Scene {
 
   private drawHud(): void {
     const { height } = this.scale.gameSize;
-    this.add.text(
-      HUD_MARGIN,
-      height - 30,
-      'Click a unit to select it, then right-click a base to march in and attack.',
-      this.getLabelStyle('#aeb8cc', '14px'),
-    );
+    this.add
+      .text(
+        HUD_MARGIN,
+        height - 52,
+        'Click a unit to select it, then right-click a base to march in and attack.',
+        this.getLabelStyle('#aeb8cc', '14px'),
+      )
+      .setScrollFactor(0);
+    this.add
+      .text(
+        HUD_MARGIN,
+        height - 30,
+        'Pan the map: WASD / arrow keys, push the mouse to a screen edge, or drag with the middle mouse button.',
+        this.getLabelStyle('#8592ab', '13px'),
+      )
+      .setScrollFactor(0);
   }
 
   private drawStatsPanel(): void {
     const x = this.scale.gameSize.width - STATS_PANEL_WIDTH - HUD_MARGIN;
     const y = HUD_MARGIN;
 
-    this.add.rectangle(x, y, STATS_PANEL_WIDTH, STATS_PANEL_HEIGHT, 0x0f172a, 0.9).setOrigin(0).setStrokeStyle(1, 0x6b7a99, 0.6);
-    this.add.text(x + 16, y + 14, 'Selected Unit', this.getLabelStyle('#f6f7fb', '18px'));
-    this.statsPanelText = this.add.text(x + 16, y + 48, this.selectedUnitId ? '' : 'None selected', {
-      color: '#aeb8cc',
-      fontFamily: 'Inter, system-ui, sans-serif',
-      fontSize: '14px',
-      lineSpacing: 8,
-    });
+    this.add
+      .rectangle(x, y, STATS_PANEL_WIDTH, STATS_PANEL_HEIGHT, 0x0f172a, 0.9)
+      .setOrigin(0)
+      .setStrokeStyle(1, 0x6b7a99, 0.6)
+      .setScrollFactor(0);
+    this.add.text(x + 16, y + 14, 'Selected Unit', this.getLabelStyle('#f6f7fb', '18px')).setScrollFactor(0);
+    this.statsPanelText = this.add
+      .text(x + 16, y + 48, this.selectedUnitId ? '' : 'None selected', {
+        color: '#aeb8cc',
+        fontFamily: 'Inter, system-ui, sans-serif',
+        fontSize: '14px',
+        lineSpacing: 8,
+      })
+      .setScrollFactor(0);
   }
 
   private selectUnit(unit: UnitState): void {
@@ -253,6 +345,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
+    this.updatePan(delta);
+
     this.world.units.forEach((unit) => {
       const runtime = this.unitRuntime.get(unit.id);
       if (!runtime || !runtime.targetBase) return;
@@ -281,6 +375,36 @@ export class GameScene extends Phaser.Scene {
         this.attackBase(unit, runtime, delta);
       }
     });
+  }
+
+  // Poll keyboard and screen-edge input each frame and scroll the camera.
+  // (Middle-mouse drag panning is event-driven in setupPanControls.)
+  private updatePan(delta: number): void {
+    let dx = 0;
+    let dy = 0;
+
+    if (this.cursors?.left.isDown || this.wasd?.left.isDown) dx -= 1;
+    if (this.cursors?.right.isDown || this.wasd?.right.isDown) dx += 1;
+    if (this.cursors?.up.isDown || this.wasd?.up.isDown) dy -= 1;
+    if (this.cursors?.down.isDown || this.wasd?.down.isDown) dy += 1;
+
+    // Edge scrolling: pushing the pointer into a screen-edge band pans that way.
+    const pointer = this.input.activePointer;
+    if (this.pointerInWindow && !this.isDragPanning) {
+      const { width, height } = this.scale.gameSize;
+      if (pointer.x <= EDGE_SCROLL_MARGIN) dx -= 1;
+      else if (pointer.x >= width - EDGE_SCROLL_MARGIN) dx += 1;
+      if (pointer.y <= EDGE_SCROLL_MARGIN) dy -= 1;
+      else if (pointer.y >= height - EDGE_SCROLL_MARGIN) dy += 1;
+    }
+
+    if (dx === 0 && dy === 0) return;
+
+    const distance = (PAN_KEY_SPEED * delta) / 1000;
+    const length = Math.hypot(dx, dy);
+    const cam = this.cameras.main;
+    cam.scrollX += (dx / length) * distance;
+    cam.scrollY += (dy / length) * distance;
   }
 
   private updateUnitPosition(unitId: string): void {
