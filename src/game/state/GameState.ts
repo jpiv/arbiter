@@ -1,5 +1,12 @@
-import { BaseState, Faction, GameMap, UnitState, WorldState } from '../world';
-import { BaseSnapshot, GameOutcome, GameStateSnapshot, UnitOrder, UnitSnapshot } from './types';
+import { BaseState, Faction, GameMap, ResourceNodeState, UnitState, WorldState } from '../world';
+import {
+  BaseSnapshot,
+  GameOutcome,
+  GameStateSnapshot,
+  ResourceNodeSnapshot,
+  UnitOrder,
+  UnitSnapshot,
+} from './types';
 
 // Live, mutating state for a single unit. Position is the unit's center in
 // fractional grid coordinates so movement is smooth and tile-size independent.
@@ -22,12 +29,14 @@ export class GameState {
   readonly map: GameMap;
   private readonly bases: BaseState[];
   private readonly units: UnitState[];
+  private readonly resourceNodes: ResourceNodeState[];
   private readonly live = new Map<string, UnitLive>();
 
   constructor(world: WorldState) {
     this.map = world.map;
     this.bases = [world.base, world.enemyBase];
     this.units = world.units;
+    this.resourceNodes = world.resourceNodes;
     for (const unit of this.units) {
       this.live.set(unit.id, {
         x: unit.position.x + 0.5,
@@ -57,6 +66,14 @@ export class GameState {
 
   getBase(baseId: string): BaseState | undefined {
     return this.bases.find((base) => base.id === baseId);
+  }
+
+  getResourceNodes(): readonly ResourceNodeState[] {
+    return this.resourceNodes;
+  }
+
+  getResourceNode(nodeId: string): ResourceNodeState | undefined {
+    return this.resourceNodes.find((node) => node.id === nodeId);
   }
 
   /** Live center position (fractional grid coords), or undefined if no unit. */
@@ -104,6 +121,11 @@ export class GameState {
     if (live) live.order = { kind: 'move', x: tileX, y: tileY };
   }
 
+  orderCollect(unitId: string, nodeId: string): void {
+    const live = this.live.get(unitId);
+    if (live) live.order = { kind: 'collect', nodeId };
+  }
+
   clearOrder(unitId: string): void {
     const live = this.live.get(unitId);
     if (live) live.order = { kind: 'idle' };
@@ -115,6 +137,19 @@ export class GameState {
     if (!base) return 0;
     base.health = Math.max(0, base.health - amount);
     return base.health;
+  }
+
+  /**
+   * Mine up to `amount` from a node, capped by its remaining reserve. Returns how
+   * much was actually extracted (0 if the node is missing or already depleted) so
+   * the caller can credit exactly that to the collecting player.
+   */
+  extractFromNode(nodeId: string, amount: number): number {
+    const node = this.getResourceNode(nodeId);
+    if (!node || node.amount <= 0 || amount <= 0) return 0;
+    const extracted = Math.min(amount, node.amount);
+    node.amount -= extracted;
+    return extracted;
   }
 
   // --- Serialization --------------------------------------------------------
@@ -149,10 +184,20 @@ export class GameState {
       };
     });
 
+    const resourceNodes: ResourceNodeSnapshot[] = this.resourceNodes.map((node) => ({
+      id: node.id,
+      name: node.name,
+      resource: node.resource,
+      position: { x: node.position.x, y: node.position.y },
+      amount: node.amount,
+      depleted: node.amount <= 0,
+    }));
+
     return {
       map: { columns: this.map.columns, rows: this.map.rows },
       bases,
       units,
+      resourceNodes,
     };
   }
 
@@ -181,6 +226,18 @@ export class GameState {
     }
 
     lines.push('');
+    lines.push('Resource Nodes:');
+    if (snapshot.resourceNodes.length === 0) {
+      lines.push('- (none)');
+    }
+    for (const node of snapshot.resourceNodes) {
+      const status = node.depleted ? 'DEPLETED' : `${node.amount} ${node.resource} left`;
+      lines.push(
+        `- ${node.name} [${node.id}] — ${node.resource}, at [${node.position.x},${node.position.y}] — ${status}`,
+      );
+    }
+
+    lines.push('');
     lines.push('Units:');
     for (const unit of snapshot.units) {
       lines.push(
@@ -200,6 +257,8 @@ function describeOrder(order: UnitOrder): string {
       return `attacking ${order.targetId}`;
     case 'move':
       return `moving to [${order.x},${order.y}]`;
+    case 'collect':
+      return `gathering from ${order.nodeId}`;
     case 'idle':
     default:
       return 'idle';

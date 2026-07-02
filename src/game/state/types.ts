@@ -1,4 +1,4 @@
-import { ControllerKind, Faction, UnitRole, UnitStats } from '../world';
+import { ControllerKind, Faction, PlayerResources, ResourceKind, UnitRole, UnitStats } from '../world';
 
 /**
  * The decided result of a match: `victory` when every enemy base is destroyed,
@@ -12,7 +12,9 @@ export type UnitOrder =
   | { kind: 'idle' }
   | { kind: 'attack'; targetId: string }
   // Walking to a destination tile (integer grid coords), with nothing to fight.
-  | { kind: 'move'; x: number; y: number };
+  | { kind: 'move'; x: number; y: number }
+  // Moving to a resource node and mining it until it (or the reserve) runs out.
+  | { kind: 'collect'; nodeId: string };
 
 /** A base as seen in a state snapshot (serializable, no live-object refs). */
 export interface BaseSnapshot {
@@ -36,6 +38,16 @@ export interface UnitSnapshot {
   order: UnitOrder;
 }
 
+/** A resource node as seen in a state snapshot. `amount` is the reserve left. */
+export interface ResourceNodeSnapshot {
+  id: string;
+  name: string;
+  resource: ResourceKind;
+  position: { x: number; y: number };
+  amount: number;
+  depleted: boolean;
+}
+
 /**
  * A plain, JSON-serializable picture of the whole game at one instant. This is
  * the canonical serialized form — safe to `JSON.stringify`, send to a server,
@@ -46,6 +58,7 @@ export interface GameStateSnapshot {
   map: { columns: number; rows: number };
   bases: BaseSnapshot[];
   units: UnitSnapshot[];
+  resourceNodes: ResourceNodeSnapshot[];
 }
 
 /**
@@ -60,4 +73,5 @@ export interface PlayerSnapshot {
   controller: ControllerKind;
   agentId: string;
   directive: string;
+  resources: PlayerResources;
 }

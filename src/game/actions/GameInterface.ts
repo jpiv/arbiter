@@ -1,10 +1,11 @@
 import { attackAction } from './attack';
+import { collectAction } from './collect';
 import { moveAction } from './move';
 import { setDirectiveAction } from './setDirective';
 import { ActionResult, Actor, GameAction, GameContext } from './types';
 
 /** Every action the game exposes. Register new actions here. */
-export const ALL_ACTIONS: GameAction[] = [attackAction, moveAction, setDirectiveAction];
+export const ALL_ACTIONS: GameAction[] = [attackAction, moveAction, collectAction, setDirectiveAction];
 
 /**
  * The single interface through which every game action is invoked — by a human

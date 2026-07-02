@@ -1,4 +1,4 @@
-import { UnitState } from '../world';
+import { ResourceKind, UnitState } from '../world';
 
 /** Outcome of invoking a game action. Serializable and LLM-readable. */
 export interface ActionResult {
@@ -26,6 +26,13 @@ export interface AttackTarget {
   kind: 'base' | 'unit';
 }
 
+/** A resource node a Collector can be ordered to gather from. */
+export interface CollectTarget {
+  id: string;
+  name: string;
+  resource: ResourceKind;
+}
+
 /**
  * The player on whose behalf an action is invoked. Bound once when a
  * GameInterface is created (per agent session / per human seat), so individual
@@ -48,6 +55,10 @@ export interface GameContext {
   getAttackTarget(targetId: string): AttackTarget | undefined;
   /** Order `unitId` to path toward `targetId` and attack once in range. */
   issueAttackOrder(unitId: string, targetId: string): void;
+  /** Resolve a gatherable resource node by id, or undefined if none exists. */
+  getCollectTarget(nodeId: string): CollectTarget | undefined;
+  /** Order `unitId` to path toward `nodeId` and gather from it once in range. */
+  issueCollectOrder(unitId: string, nodeId: string): void;
   /** The map's grid dimensions, so actions can keep destinations in bounds. */
   getMapBounds(): { columns: number; rows: number };
   /** Order `unitId` to path to the grid tile at column `tileX`, row `tileY`. */

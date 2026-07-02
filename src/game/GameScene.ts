@@ -1,6 +1,18 @@
 import Phaser from 'phaser';
-import { BaseState, Faction, GameMap, GridPoint, TerrainKind, UnitRole, UnitState, WorldState, prototypeWorld } from './world';
-import { AttackTarget, GameContext, GameInterface, GameToolset } from './actions';
+import {
+  BaseState,
+  Faction,
+  GameMap,
+  GridPoint,
+  ResourceKind,
+  ResourceNodeState,
+  TerrainKind,
+  UnitRole,
+  UnitState,
+  WorldState,
+  prototypeWorld,
+} from './world';
+import { AttackTarget, CollectTarget, GameContext, GameInterface, GameToolset } from './actions';
 import { GameOutcome, GameState, PlayerRegistry } from './state';
 
 interface BaseColors {
@@ -22,6 +34,11 @@ interface BaseView {
   hpText: Phaser.GameObjects.Text;
 }
 
+interface NodeView {
+  node: ResourceNodeState;
+  amountText: Phaser.GameObjects.Text;
+}
+
 const BASE_COLORS: Record<Faction, BaseColors> = {
   [Faction.Player]: { fill: 0x3f6fb5, stroke: 0xb8d6ff, inner: 0x20395f },
   [Faction.Enemy]: { fill: 0xb5443f, stroke: 0xffbdb8, inner: 0x5f2320 },
@@ -39,6 +56,7 @@ const UNIT_COLORS: Record<UnitRole, number> = {
   [UnitRole.Scout]: 0x8ecae6,
   [UnitRole.Soldier]: 0xf4a261,
   [UnitRole.RangedSoldier]: 0xd62828,
+  [UnitRole.Collector]: 0x9ae66e,
 };
 
 // A unit's fill is its role; its outline is its faction, so the two sides read
@@ -48,6 +66,11 @@ const UNIT_STROKE: Record<Faction, number> = {
   [Faction.Enemy]: 0xff9a93,
 };
 
+// Resource nodes on the map: an emerald tile with a light stroke, distinct from
+// bases (blue/red) and terrain.
+const RESOURCE_NODE_FILL = 0x2fbf71;
+const RESOURCE_NODE_STROKE = 0xd9f7e6;
+
 const STATS_PANEL_WIDTH = 246;
 const STATS_PANEL_HEIGHT = 144;
 const HUD_MARGIN = 24;
@@ -56,6 +79,8 @@ const HUD_MARGIN = 24;
 const SPEED_TILES_PER_SEC = 0.5;
 // How often an in-range unit lands a hit on a base (milliseconds).
 const ATTACK_INTERVAL_MS = 700;
+// How often an in-range Collector pulls resource from a node (milliseconds).
+const COLLECT_INTERVAL_MS = 700;
 
 // Camera panning. The map is larger than the viewport, so the player scrolls
 // the camera to see the rest of it (keyboard, screen-edge push, or mouse drag).
@@ -76,7 +101,11 @@ export class GameScene extends Phaser.Scene implements GameContext {
   // Per-unit attack cooldown (ms remaining until the next hit). Purely a sim
   // cadence detail, so it lives here rather than in the shared GameState.
   private readonly attackTimers = new Map<string, number>();
+  // Per-collector gather cooldown (ms remaining until the next pull), mirroring
+  // attackTimers — a sim cadence detail kept out of the shared GameState.
+  private readonly collectTimers = new Map<string, number>();
   private readonly baseViews = new Map<string, BaseView>();
+  private readonly nodeViews = new Map<string, NodeView>();
   private tileSize = 0;
   private originX = 0;
   private originY = 0;
@@ -210,6 +239,17 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.gameState.orderAttack(unitId, targetId);
     // Reset the cooldown so an in-range unit lands its first hit immediately.
     this.attackTimers.set(unitId, 0);
+  }
+
+  getCollectTarget(nodeId: string): CollectTarget | undefined {
+    const node = this.gameState.getResourceNode(nodeId);
+    return node ? { id: node.id, name: node.name, resource: node.resource } : undefined;
+  }
+
+  issueCollectOrder(unitId: string, nodeId: string): void {
+    this.gameState.orderCollect(unitId, nodeId);
+    // Reset the cooldown so an in-range collector pulls its first load immediately.
+    this.collectTimers.set(unitId, 0);
   }
 
   getMapBounds(): { columns: number; rows: number } {
@@ -369,6 +409,7 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.children.removeAll(true);
     this.unitViews.clear();
     this.baseViews.clear();
+    this.nodeViews.clear();
     this.hudObjects = [];
     this.selectedUnitBody = undefined;
     this.selectedUnitMarker = undefined;
@@ -382,6 +423,7 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.cameras.main.setBounds(0, 0, map.columns * this.tileSize, map.rows * this.tileSize);
     this.drawMap(map);
     this.gameState.getBases().forEach((base) => this.drawBase(base));
+    this.gameState.getResourceNodes().forEach((node) => this.drawResourceNode(node));
     this.gameState.getUnits().forEach((unit) => this.drawUnit(unit));
     this.drawStatsPanel();
     this.applyCameraLayers();
@@ -445,6 +487,33 @@ export class GameScene extends Phaser.Scene implements GameContext {
 
     rect.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (pointer.rightButtonDown()) this.orderAttack(base);
+    });
+  }
+
+  // A resource node occupies a single tile. Draw it as an emerald square with a
+  // short kind label and its remaining reserve; right-clicking it with a
+  // Collector selected issues a collect order (same door as an LLM tool call).
+  private drawResourceNode(node: ResourceNodeState): void {
+    const position = this.tileToWorld(node.position);
+    const size = this.tileSize;
+
+    const rect = this.add
+      .rectangle(position.x, position.y, size, size, RESOURCE_NODE_FILL, 0.92)
+      .setOrigin(0)
+      .setStrokeStyle(3, RESOURCE_NODE_STROKE, 0.85)
+      .setInteractive(new Phaser.Geom.Rectangle(0, 0, size, size), Phaser.Geom.Rectangle.Contains);
+
+    this.add
+      .text(position.x + size / 2, position.y + 8, resourceLabel(node.resource), this.getLabelStyle('#08201a', '14px'))
+      .setOrigin(0.5, 0);
+    const amountText = this.add
+      .text(position.x + size / 2, position.y + size - 8, `${node.amount}`, this.getLabelStyle('#08201a', '13px'))
+      .setOrigin(0.5, 1);
+
+    this.nodeViews.set(node.id, { node, amountText });
+
+    rect.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.rightButtonDown()) this.orderCollect(node);
     });
   }
 
@@ -548,6 +617,17 @@ export class GameScene extends Phaser.Scene implements GameContext {
     });
   }
 
+  // Order the currently selected unit to gather from `node`. Routed through the
+  // game interface so a right-click and an LLM `collect` tool call share one
+  // path — the interface rejects non-Collector units with a clear message.
+  private orderCollect(node: ResourceNodeState): void {
+    if (!this.selectedUnitId) return;
+    this.interfaceFor(this.humanPlayerId).invoke('collect', {
+      unitId: this.selectedUnitId,
+      nodeId: node.id,
+    });
+  }
+
   // Order the currently selected unit to the grid tile under the pointer. Like
   // orderAttack, this goes through the game interface so a right-click and an LLM
   // `move` tool call share the exact same path.
@@ -574,6 +654,7 @@ export class GameScene extends Phaser.Scene implements GameContext {
       // A unit carries out at most one order per frame; idle units do nothing.
       if (order.kind === 'attack') this.advanceAttack(unit, order.targetId, delta);
       else if (order.kind === 'move') this.advanceMove(unit, order.x, order.y, delta);
+      else if (order.kind === 'collect') this.advanceCollect(unit, order.nodeId, delta);
     });
 
     const outcome = this.gameState.getOutcome();
@@ -643,6 +724,37 @@ export class GameScene extends Phaser.Scene implements GameContext {
       this.gameState.setUnitPosition(unit.id, pos.x + (dx / distance) * step, pos.y + (dy / distance) * step);
     }
     this.updateUnitPosition(unit.id);
+  }
+
+  // Path toward a resource node's tile and start mining it once within range.
+  // Mirrors advanceAttack, but the node is a single tile and instead of dealing
+  // damage the collector credits its owner's stockpile (see collectFromNode).
+  private advanceCollect(unit: UnitState, nodeId: string, delta: number): void {
+    const node = this.gameState.getResourceNode(nodeId);
+    const pos = this.gameState.getUnitPosition(unit.id);
+    if (!node || !pos) return;
+
+    if (node.amount <= 0) {
+      this.gameState.clearOrder(unit.id);
+      return;
+    }
+
+    // Distance to the node tile's center, in grid units.
+    const targetX = node.position.x + 0.5;
+    const targetY = node.position.y + 0.5;
+    const dx = targetX - pos.x;
+    const dy = targetY - pos.y;
+    const distance = Math.hypot(dx, dy);
+    const range = unit.config.stats.range;
+
+    if (distance > range) {
+      const step = unit.config.stats.speed * SPEED_TILES_PER_SEC * (delta / 1000);
+      const travel = Math.min(step, distance - range);
+      this.gameState.setUnitPosition(unit.id, pos.x + (dx / distance) * travel, pos.y + (dy / distance) * travel);
+      this.updateUnitPosition(unit.id);
+    } else {
+      this.collectFromNode(unit, node, delta);
+    }
   }
 
   // Poll keyboard and screen-edge input each frame and scroll the camera.
@@ -720,6 +832,26 @@ export class GameScene extends Phaser.Scene implements GameContext {
     if (health <= 0) this.gameState.clearOrder(unit.id);
   }
 
+  private collectFromNode(unit: UnitState, node: ResourceNodeState, delta: number): void {
+    let timer = (this.collectTimers.get(unit.id) ?? 0) - delta;
+    if (timer > 0) {
+      this.collectTimers.set(unit.id, timer);
+      return;
+    }
+    timer = COLLECT_INTERVAL_MS;
+    this.collectTimers.set(unit.id, timer);
+
+    const extracted = this.gameState.extractFromNode(node.id, unit.config.stats.power);
+    if (extracted > 0) {
+      // Credit the collector's owner (resolved by faction) with what it mined.
+      const owner = this.players.getPlayerByFaction(unit.faction);
+      if (owner) this.players.addResource(owner.id, node.resource, extracted);
+    }
+
+    this.nodeViews.get(node.id)?.amountText.setText(node.amount > 0 ? `${node.amount}` : 'empty');
+    if (node.amount <= 0) this.gameState.clearOrder(unit.id);
+  }
+
   private tileToWorld(point: GridPoint): GridPoint {
     return {
       x: this.originX + point.x * this.tileSize,
@@ -738,5 +870,15 @@ export class GameScene extends Phaser.Scene implements GameContext {
 
   private getUnitInitial(unit: UnitState): string {
     return unit.config.role.slice(0, 1);
+  }
+}
+
+// Short on-tile badge for a resource kind, e.g. resource1 -> "R1".
+function resourceLabel(resource: ResourceKind): string {
+  switch (resource) {
+    case ResourceKind.Resource1:
+      return 'R1';
+    default:
+      return resource;
   }
 }

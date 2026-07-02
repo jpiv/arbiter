@@ -15,6 +15,24 @@ export enum UnitRole {
   Soldier = 'Soldier',
   RangedSoldier = 'Ranged Soldier',
   Builder = 'Builder',
+  Collector = 'Collector',
+}
+
+/**
+ * A gatherable resource type. Just one to start ("Resource 1"); resources are
+ * modeled as a keyed record so more kinds can be added later without reshaping
+ * any player or snapshot structure.
+ */
+export enum ResourceKind {
+  Resource1 = 'resource1',
+}
+
+/** How much of each resource a player currently holds. */
+export type PlayerResources = Record<ResourceKind, number>;
+
+/** A fresh, zeroed stockpile — one entry per known {@link ResourceKind}. */
+export function emptyResources(): PlayerResources {
+  return { [ResourceKind.Resource1]: 0 };
 }
 
 /** Who drives a player: the human at the keyboard, or an autonomous agent loop. */
@@ -36,6 +54,8 @@ export interface PlayerRecord {
   agentId: string;
   // Standing operating plan the autonomous loop reads each tick; '' = none.
   directive: string;
+  // Stockpile of gathered resources, keyed by kind. Collectors credit this.
+  resources: PlayerResources;
 }
 
 export interface UnitStats {
@@ -79,11 +99,26 @@ export interface UnitState {
   position: GridPoint;
 }
 
+/**
+ * A resource deposit on the map. A single tile a Collector can gather from; its
+ * `amount` is a finite reserve that depletes as it's mined. Neutral map terrain
+ * (no faction) — whichever side sends a Collector reaps it.
+ */
+export interface ResourceNodeState {
+  id: string;
+  name: string;
+  resource: ResourceKind;
+  position: GridPoint;
+  amount: number;
+}
+
 export interface WorldState {
   map: GameMap;
   base: BaseState;
   enemyBase: BaseState;
   units: UnitState[];
+  // Gatherable resource deposits scattered on the map (see prototypeWorld).
+  resourceNodes: ResourceNodeState[];
   // The players in the match. Today: just the one human seat (see prototypeWorld).
   players: PlayerRecord[];
 }
@@ -128,6 +163,17 @@ export const UNIT_CONFIGS: Record<UnitRole, UnitConfig> = {
       power: 16,
     },
   },
+  // A non-combat gatherer. `range` is how close it must get to a node to mine
+  // it; `power` doubles as the amount of resource pulled per collection tick.
+  [UnitRole.Collector]: {
+    role: UnitRole.Collector,
+    stats: {
+      speed: 4,
+      range: 1,
+      hp: 80,
+      power: 10,
+    },
+  },
 };
 
 // A large map so there is more world than fits on screen at once, which is what
@@ -138,6 +184,14 @@ const MAP_TILE_SIZE = 54;
 
 const PLAYER_BASE = { position: { x: 18, y: 10 }, size: { x: 3, y: 3 } };
 const ENEMY_BASE = { position: { x: 39, y: 10 }, size: { x: 3, y: 3 } };
+
+// A couple of Resource 1 deposits near the player's base. Their tiles (and a
+// one-tile ring) are cleared to ground in generateTerrain so a Collector can
+// always path onto and stand beside them.
+const RESOURCE_NODES: ResourceNodeState[] = [
+  { id: 'node-r1-a', name: 'Resource Node A', resource: ResourceKind.Resource1, position: { x: 15, y: 8 }, amount: 500 },
+  { id: 'node-r1-b', name: 'Resource Node B', resource: ResourceKind.Resource1, position: { x: 16, y: 14 }, amount: 500 },
+];
 
 // Small deterministic PRNG (mulberry32) so the generated map is identical on
 // every load rather than reshuffling on each refresh.
@@ -183,6 +237,16 @@ function generateTerrain(columns: number, rows: number, seed = 20260701): Terrai
   for (const base of [PLAYER_BASE, ENEMY_BASE]) {
     for (let y = base.position.y - 2; y < base.position.y + base.size.y + 2; y++) {
       for (let x = base.position.x - 2; x < base.position.x + base.size.x + 2; x++) {
+        if (inBounds(x, y)) terrain[y][x] = TerrainKind.Ground;
+      }
+    }
+  }
+
+  // Clear each resource node's tile plus a one-tile ring so a Collector can
+  // always reach it — nodes must never sit on water or be walled in by ridge.
+  for (const node of RESOURCE_NODES) {
+    for (let y = node.position.y - 1; y <= node.position.y + 1; y++) {
+      for (let x = node.position.x - 1; x <= node.position.x + 1; x++) {
         if (inBounds(x, y)) terrain[y][x] = TerrainKind.Ground;
       }
     }
@@ -243,6 +307,13 @@ export const prototypeWorld: WorldState = {
       faction: Faction.Player,
       position: { x: 21, y: 12 },
     },
+    {
+      id: 'unit-collector-1',
+      name: 'Collector 1',
+      config: UNIT_CONFIGS[UnitRole.Collector],
+      faction: Faction.Player,
+      position: { x: 20, y: 12 },
+    },
     // Enemy forces, staged near Base Omega and commanded by the opponent agent.
     {
       id: 'unit-enemy-scout-1',
@@ -266,6 +337,7 @@ export const prototypeWorld: WorldState = {
       position: { x: 38, y: 12 },
     },
   ],
+  resourceNodes: RESOURCE_NODES.map((node) => ({ ...node })),
   // Two seats: the human (Arbiter Prime), passive until given a directive, and
   // the AI opponent (Adversary Prime), which starts with a standing win plan so
   // the autonomous loop drives it from the first tick.
@@ -277,6 +349,7 @@ export const prototypeWorld: WorldState = {
       controller: 'user',
       agentId: 'arbiter-prime',
       directive: '',
+      resources: emptyResources(),
     },
     {
       id: 'player-2',
@@ -287,6 +360,7 @@ export const prototypeWorld: WorldState = {
       directive:
         'Win the game: mass your units and destroy the player base [base-alpha], while keeping ' +
         'your own base [base-omega] alive. Press the attack and do not stall.',
+      resources: emptyResources(),
     },
   ],
 };
