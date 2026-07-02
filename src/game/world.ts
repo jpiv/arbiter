@@ -100,8 +100,8 @@ const MAP_COLUMNS = 60;
 const MAP_ROWS = 24;
 const MAP_TILE_SIZE = 54;
 
-const PLAYER_BASE = { position: { x: 3, y: 10 }, size: { x: 3, y: 3 } };
-const ENEMY_BASE = { position: { x: 54, y: 10 }, size: { x: 3, y: 3 } };
+const PLAYER_BASE = { position: { x: 18, y: 10 }, size: { x: 3, y: 3 } };
+const ENEMY_BASE = { position: { x: 39, y: 10 }, size: { x: 3, y: 3 } };
 
 // Small deterministic PRNG (mulberry32) so the generated map is identical on
 // every load rather than reshuffling on each refresh.
@@ -184,21 +184,21 @@ export const prototypeWorld: WorldState = {
       name: 'Scout 1',
       config: UNIT_CONFIGS[UnitRole.Scout],
       faction: Faction.Player,
-      position: { x: 7, y: 10 },
+      position: { x: 22, y: 10 },
     },
     {
       id: 'unit-soldier-1',
       name: 'Soldier 1',
       config: UNIT_CONFIGS[UnitRole.Soldier],
       faction: Faction.Player,
-      position: { x: 7, y: 11 },
+      position: { x: 22, y: 11 },
     },
     {
       id: 'unit-builder-1',
       name: 'Builder 1',
       config: UNIT_CONFIGS[UnitRole.Builder],
       faction: Faction.Player,
-      position: { x: 6, y: 12 },
+      position: { x: 21, y: 12 },
     },
   ],
 };
