@@ -27,6 +27,9 @@ new Phaser.Game(gameConfig);
 new AgentPanel({
   toolset: scene.commandTools,
   buildStateText: () => scene.getState().toPromptText(),
+  // While the composer is focused, suspend the scene's keyboard controls so the
+  // camera keys (SPACE/WASD/arrows/±) can be typed instead of driving the game.
+  setGameKeyboardEnabled: (enabled) => scene.setKeyboardEnabled(enabled),
 }).mount();
 
 // Dev console overlay for inspecting the live game state.

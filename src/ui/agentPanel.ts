@@ -9,6 +9,10 @@ export interface AgentPanelDeps {
   toolset: GameToolset;
   // Produces the current game-state text injected into the agent's context.
   buildStateText: () => string;
+  // Suspends/resumes the game's keyboard controls. The composer calls this on
+  // focus/blur so the game doesn't capture the keys the user is trying to type
+  // (SPACE, WASD, the arrows and ±, all bound to camera pan/zoom).
+  setGameKeyboardEnabled?: (enabled: boolean) => void;
   agents?: Agent[];
 }
 
@@ -21,6 +25,7 @@ export class AgentPanel {
   private readonly agents: Agent[];
   private readonly toolset: GameToolset;
   private readonly buildStateText: () => string;
+  private readonly setGameKeyboardEnabled: (enabled: boolean) => void;
   private readonly conversations = new Map<string, ChatMessage[]>();
 
   private activeAgent?: Agent;
@@ -42,6 +47,7 @@ export class AgentPanel {
   constructor(deps: AgentPanelDeps) {
     this.toolset = deps.toolset;
     this.buildStateText = deps.buildStateText;
+    this.setGameKeyboardEnabled = deps.setGameKeyboardEnabled ?? (() => {});
     this.agents = deps.agents ?? AGENTS;
   }
 
@@ -97,6 +103,11 @@ export class AgentPanel {
       }
     });
     this.input.addEventListener('input', () => this.autoGrow());
+    // Hand keyboard control to the composer while it's focused so the game stops
+    // eating the keys the user is typing (SPACE/WASD/arrows/± are camera controls);
+    // give it back on blur.
+    this.input.addEventListener('focus', () => this.setGameKeyboardEnabled(false));
+    this.input.addEventListener('blur', () => this.setGameKeyboardEnabled(true));
     this.sendBtn = el('button', 'agent-send');
     this.sendBtn.type = 'button';
     this.sendBtn.textContent = 'Send';

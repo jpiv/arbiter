@@ -109,6 +109,28 @@ export class GameScene extends Phaser.Scene implements GameContext {
     return this.gameState;
   }
 
+  /**
+   * Suspend or resume the scene's keyboard controls so DOM overlays layered over
+   * the canvas (e.g. the agent composer) can receive keys the game would swallow.
+   * Phaser captures the pan/zoom keys — SPACE (via `createCursorKeys`), WASD, the
+   * arrows and ± — at the window level and calls `preventDefault` on their
+   * keydowns regardless of what's focused, so those characters never reach a
+   * focused text field. While suspended we also stop tracking key state (and
+   * clear any held keys) so the same keystrokes don't pan the camera behind the
+   * text field. Callers re-enable on blur.
+   */
+  setKeyboardEnabled(enabled: boolean): void {
+    const keyboard = this.input.keyboard;
+    if (!keyboard) return;
+    keyboard.enabled = enabled;
+    if (enabled) {
+      keyboard.enableGlobalCapture();
+    } else {
+      keyboard.disableGlobalCapture();
+      keyboard.resetKeys();
+    }
+  }
+
   // --- GameContext: the bridge the action layer calls into ------------------
 
   getUnit(unitId: string): UnitState | undefined {
