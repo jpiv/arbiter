@@ -3,7 +3,9 @@ import { Faction, UnitRole, UnitStats } from '../world';
 /** What a unit is currently doing. Extend as new orders are added. */
 export type UnitOrder =
   | { kind: 'idle' }
-  | { kind: 'attack'; targetId: string };
+  | { kind: 'attack'; targetId: string }
+  // Walking to a destination tile (integer grid coords), with nothing to fight.
+  | { kind: 'move'; x: number; y: number };
 
 /** A base as seen in a state snapshot (serializable, no live-object refs). */
 export interface BaseSnapshot {

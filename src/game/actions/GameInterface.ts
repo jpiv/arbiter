@@ -1,8 +1,9 @@
 import { attackAction } from './attack';
+import { moveAction } from './move';
 import { ActionResult, GameAction, GameContext } from './types';
 
 /** Every action the game exposes. Register new actions here. */
-export const ALL_ACTIONS: GameAction[] = [attackAction];
+export const ALL_ACTIONS: GameAction[] = [attackAction, moveAction];
 
 /**
  * The single interface through which every game action is invoked — by a human
