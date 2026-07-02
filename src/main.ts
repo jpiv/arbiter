@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { GameScene } from './game/GameScene';
+import { AgentPanel } from './ui/agentPanel';
 import './styles.css';
 
 const gameConfig: Phaser.Types.Core.GameConfig = {
@@ -15,3 +16,6 @@ const gameConfig: Phaser.Types.Core.GameConfig = {
 };
 
 new Phaser.Game(gameConfig);
+
+// Agent panel overlay, layered above the Phaser canvas as regular DOM.
+new AgentPanel().mount();

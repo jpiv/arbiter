@@ -1,0 +1,323 @@
+/* In-game agent panel: a right-docked overlay layered above the Phaser canvas. */
+
+.agent-root {
+  --agent-bg: rgba(12, 18, 32, 0.94);
+  --agent-border: rgba(107, 122, 153, 0.45);
+  --agent-muted: #aeb8cc;
+  --agent-text: #f6f7fb;
+  position: fixed;
+  inset: 0;
+  pointer-events: none; /* only the panel + launcher are interactive */
+  z-index: 20;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Floating button that opens the panel. */
+.agent-launcher {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--agent-border);
+  border-radius: 999px;
+  background: var(--agent-bg);
+  color: var(--agent-text);
+  font: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  pointer-events: auto;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  transition: transform 0.12s ease, border-color 0.12s ease, opacity 0.15s ease;
+}
+.agent-launcher:hover {
+  transform: translateY(-1px);
+  border-color: rgba(142, 202, 230, 0.8);
+}
+.agent-launcher .agent-launcher-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6ee7a8;
+  box-shadow: 0 0 8px #6ee7a8;
+}
+.agent-root[data-open='true'] .agent-launcher {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The panel itself. */
+.agent-panel {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--agent-border);
+  border-radius: 14px;
+  background: var(--agent-bg);
+  color: var(--agent-text);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+  overflow: hidden;
+  transform: translateX(calc(100% + 24px));
+  opacity: 0;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.agent-root[data-open='true'] .agent-panel {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+.agent-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--agent-border);
+}
+.agent-header-title-wrap {
+  flex: 1;
+  min-width: 0;
+}
+.agent-header-title {
+  font-size: 16px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-header-sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--agent-muted);
+}
+.agent-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--agent-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.agent-icon-btn:hover {
+  color: var(--agent-text);
+  border-color: var(--agent-border);
+}
+
+/* Roster list. */
+.agent-roster {
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.agent-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--agent-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+.agent-card:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.05);
+}
+.agent-avatar {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  color: #08111f;
+}
+.agent-card-body {
+  min-width: 0;
+  flex: 1;
+}
+.agent-card-name {
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.agent-card-name .agent-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6ee7a8;
+  box-shadow: 0 0 6px #6ee7a8;
+}
+.agent-card-role {
+  font-size: 12px;
+  color: var(--agent-muted);
+  margin-top: 2px;
+}
+.agent-card-blurb {
+  font-size: 12px;
+  color: var(--agent-muted);
+  margin-top: 4px;
+  line-height: 1.35;
+}
+
+/* Chat view (hidden until an agent is opened). */
+.agent-chat {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.agent-root[data-view='chat'] .agent-roster {
+  display: none;
+}
+.agent-root[data-view='chat'] .agent-chat {
+  display: flex;
+}
+
+.agent-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.agent-msg {
+  max-width: 88%;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.agent-msg-user {
+  align-self: flex-end;
+  background: #2b4a72;
+  color: #eaf2ff;
+  border-bottom-right-radius: 4px;
+}
+.agent-msg-assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--agent-border);
+  border-bottom-left-radius: 4px;
+}
+/* Muted "thinking" preview streamed from a reasoning model before the answer. */
+.agent-msg-think {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--agent-muted);
+  opacity: 0.85;
+  line-height: 1.4;
+  margin-bottom: 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--agent-border);
+  white-space: pre-wrap;
+}
+.agent-msg-error {
+  align-self: stretch;
+  max-width: 100%;
+  background: rgba(181, 68, 63, 0.18);
+  border: 1px solid rgba(255, 189, 184, 0.5);
+  color: #ffd9d6;
+  font-size: 12.5px;
+}
+.agent-msg-empty {
+  color: var(--agent-muted);
+  font-size: 13px;
+  text-align: center;
+  margin: auto 0;
+  line-height: 1.5;
+}
+/* Blinking caret shown on the assistant bubble while a reply is streaming. */
+.agent-msg-streaming::after {
+  content: '▋';
+  margin-left: 1px;
+  color: var(--agent-muted);
+  animation: agent-caret 1s steps(1) infinite;
+}
+@keyframes agent-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+.agent-composer {
+  border-top: 1px solid var(--agent-border);
+  padding: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.agent-input {
+  flex: 1;
+  resize: none;
+  max-height: 120px;
+  padding: 9px 11px;
+  border: 1px solid var(--agent-border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--agent-text);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.agent-input:focus {
+  outline: none;
+  border-color: rgba(142, 202, 230, 0.8);
+}
+.agent-input::placeholder {
+  color: var(--agent-muted);
+}
+.agent-send {
+  flex: 0 0 auto;
+  height: 38px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 10px;
+  background: #3f6fb5;
+  color: #f6f7fb;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.agent-send:hover {
+  background: #4c81cf;
+}
+.agent-send.is-stop {
+  background: #7d3a37;
+}
+.agent-send.is-stop:hover {
+  background: #9a4743;
+}
