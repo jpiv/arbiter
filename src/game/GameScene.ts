@@ -38,6 +38,7 @@ const UNIT_COLORS: Record<UnitRole, number> = {
   [UnitRole.Builder]: 0xe9c46a,
   [UnitRole.Scout]: 0x8ecae6,
   [UnitRole.Soldier]: 0xf4a261,
+  [UnitRole.RangedSoldier]: 0xd62828,
 };
 
 // A unit's fill is its role; its outline is its faction, so the two sides read
