@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
-import { getAgent } from './agents';
+import { AGENTS, getAgent } from './agents';
 import { AgentLoop } from './game/agents/AgentLoop';
 import { GameScene } from './game/GameScene';
+import { GAME_RULES } from './game/rules';
 import { AgentPanel } from './ui/agentPanel';
 import { DevConsole } from './ui/devConsole';
 import './styles.css';
@@ -26,15 +27,29 @@ new Phaser.Game(gameConfig);
 // The human seat. Both the chat panel and the mouse act as this player.
 const userPlayerId = scene.getUserPlayerId();
 
-// The LLM context handed to every agent: the world plus the players (so an agent
-// sees its own standing directive alongside the battlefield).
-const buildStateText = () => `${scene.getState().toPromptText()}\n\n${scene.getPlayers().toPromptText()}`;
+// The LLM context handed to every agent: the rules (objective + mechanics) plus
+// the live world plus the players (so an agent sees its own standing directive
+// alongside the battlefield). Same builder for chat and the autonomous loop.
+const buildStateText = () =>
+  `${GAME_RULES}\n\n${scene.getState().toPromptText()}\n\n${scene.getPlayers().toPromptText()}`;
+
+// Only the human's own agents are chattable; opponent agents drive AI seats and
+// are kept out of the roster.
+const userAgentIds = new Set(
+  scene
+    .getPlayers()
+    .getPlayers()
+    .filter((player) => player.controller === 'user')
+    .map((player) => player.agentId),
+);
+const rosterAgents = AGENTS.filter((agent) => userAgentIds.has(agent.id));
 
 // Agent panel overlay, layered above the Phaser canvas as regular DOM. It is
 // given the user player's tool wrapper (so agents can act via move/attack/… tools),
 // a state serializer (so each turn sees the current battlefield), and a chat-busy
 // hook so the autonomous loop defers to the human while they're steering.
 new AgentPanel({
+  agents: rosterAgents,
   toolset: scene.toolsetFor(userPlayerId),
   buildStateText,
   // While the composer is focused, suspend the scene's keyboard controls so the

@@ -1,4 +1,4 @@
-import { ActionResult, GameAction, GameContext } from './types';
+import { ActionResult, Actor, GameAction, GameContext } from './types';
 
 export interface AttackArgs extends Record<string, unknown> {
   unitId: string;
@@ -30,7 +30,7 @@ export const attackAction: GameAction<AttackArgs> = {
     },
     required: ['unitId', 'targetId'],
   },
-  execute(args, context: GameContext): ActionResult {
+  execute(args, context: GameContext, actor: Actor): ActionResult {
     const unitId = typeof args?.unitId === 'string' ? args.unitId : '';
     const targetId = typeof args?.targetId === 'string' ? args.targetId : '';
 
@@ -39,6 +39,9 @@ export const attackAction: GameAction<AttackArgs> = {
 
     const unit = context.getUnit(unitId);
     if (!unit) return fail(`No unit found with id "${unitId}".`);
+    if (!context.playerOwnsUnit(actor.playerId, unit.id)) {
+      return fail(`${unit.name} is not one of your units to command.`);
+    }
 
     const target = context.getAttackTarget(targetId);
     if (!target) return fail(`No attackable target found with id "${targetId}".`);

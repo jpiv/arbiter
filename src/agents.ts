@@ -1,6 +1,7 @@
-// A chat-capable AI agent the player can consult from the in-game agent panel.
-// Today there is a single main agent; the panel is built to render a list so more
-// can be dropped into `AGENTS` later (scouts, base advisors, etc.) with no UI work.
+// An AI agent that drives a player. Some are the human's own agents (shown in the
+// in-game panel to chat with); others drive AI opponents and never appear there —
+// main.ts filters the roster to the user's agents. Every player's `agentId` joins
+// to one of these.
 //
 // Each agent has two operating modes with their own prompt:
 //  - commandPrompt: user-facing chat. The agent acts on the player's requests and
@@ -55,6 +56,30 @@ export const AGENTS: Agent[] = [
       'them be. Do not narrate at length; a brief note on what you did (or that you are holding) ' +
       'is enough.',
     accent: '#8ecae6',
+  },
+  {
+    id: 'adversary-prime',
+    name: 'Adversary Prime',
+    role: 'Enemy Commander',
+    blurb: 'The opposing AI commander. Plays to destroy your base.',
+    // The human never chats with the opponent (it's filtered out of the roster),
+    // but the Agent shape requires a command prompt; keep a minimal sensible one.
+    commandPrompt:
+      'You are Adversary Prime, the enemy commander in Arbiter, a 2D real-time strategy prototype. ' +
+      'You are AI-controlled and normally act on your own each turn rather than through chat. If ' +
+      'consulted directly, answer concisely and in character as the opponent.',
+    playPrompt:
+      'You are Adversary Prime, the enemy commander in Arbiter, a 2D real-time strategy prototype. ' +
+      'You play to WIN: destroy the opposing (player) base while keeping your own base alive. It ' +
+      'is now your turn to act autonomously.\n\n' +
+      'Read the game rules and the current game state above, plus your standing directive below. ' +
+      'Command only your own (enemy-faction) units — move and attack to advance on the player base ' +
+      'and drive its HP to 0, and defend your base if it is threatened. Use the exact unit and ' +
+      'target ids shown in the game state.\n\n' +
+      'Each turn, take real action that advances a path to victory — do not stall. But prefer a ' +
+      'small number of purposeful orders over churn: if your units are already carrying out the ' +
+      'plan, leave them be. Keep any note brief.',
+    accent: '#e5484d',
   },
 ];
 

@@ -223,9 +223,32 @@ export const prototypeWorld: WorldState = {
       faction: Faction.Player,
       position: { x: 21, y: 12 },
     },
+    // Enemy forces, staged near Base Omega and commanded by the opponent agent.
+    {
+      id: 'unit-enemy-scout-1',
+      name: 'Enemy Scout',
+      config: UNIT_CONFIGS[UnitRole.Scout],
+      faction: Faction.Enemy,
+      position: { x: 37, y: 10 },
+    },
+    {
+      id: 'unit-enemy-soldier-1',
+      name: 'Enemy Soldier',
+      config: UNIT_CONFIGS[UnitRole.Soldier],
+      faction: Faction.Enemy,
+      position: { x: 37, y: 11 },
+    },
+    {
+      id: 'unit-enemy-builder-1',
+      name: 'Enemy Builder',
+      config: UNIT_CONFIGS[UnitRole.Builder],
+      faction: Faction.Enemy,
+      position: { x: 38, y: 12 },
+    },
   ],
-  // One seat for now: the human, commanded by Arbiter Prime. Empty directive
-  // means the autonomous loop stays passive until the player gives it a plan.
+  // Two seats: the human (Arbiter Prime), passive until given a directive, and
+  // the AI opponent (Adversary Prime), which starts with a standing win plan so
+  // the autonomous loop drives it from the first tick.
   players: [
     {
       id: 'player-1',
@@ -234,6 +257,16 @@ export const prototypeWorld: WorldState = {
       controller: 'user',
       agentId: 'arbiter-prime',
       directive: '',
+    },
+    {
+      id: 'player-2',
+      name: 'Adversary',
+      faction: Faction.Enemy,
+      controller: 'ai',
+      agentId: 'adversary-prime',
+      directive:
+        'Win the game: mass your units and destroy the player base [base-alpha], while keeping ' +
+        'your own base [base-omega] alive. Press the attack and do not stall.',
     },
   ],
 };

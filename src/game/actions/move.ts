@@ -1,4 +1,4 @@
-import { ActionResult, GameAction, GameContext } from './types';
+import { ActionResult, Actor, GameAction, GameContext } from './types';
 
 export interface MoveArgs extends Record<string, unknown> {
   unitId: string;
@@ -37,7 +37,7 @@ export const moveAction: GameAction<MoveArgs> = {
     },
     required: ['unitId', 'x', 'y'],
   },
-  execute(args, context: GameContext): ActionResult {
+  execute(args, context: GameContext, actor: Actor): ActionResult {
     const unitId = typeof args?.unitId === 'string' ? args.unitId : '';
     const x = typeof args?.x === 'number' ? args.x : NaN;
     const y = typeof args?.y === 'number' ? args.y : NaN;
@@ -49,6 +49,9 @@ export const moveAction: GameAction<MoveArgs> = {
 
     const unit = context.getUnit(unitId);
     if (!unit) return fail(`No unit found with id "${unitId}".`);
+    if (!context.playerOwnsUnit(actor.playerId, unit.id)) {
+      return fail(`${unit.name} is not one of your units to command.`);
+    }
 
     // Snap to a whole tile and keep it inside the map's grid.
     const { columns, rows } = context.getMapBounds();

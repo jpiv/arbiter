@@ -40,6 +40,13 @@ const UNIT_COLORS: Record<UnitRole, number> = {
   [UnitRole.Soldier]: 0xf4a261,
 };
 
+// A unit's fill is its role; its outline is its faction, so the two sides read
+// apart at a glance (blue = player, red = enemy). Matches the base stroke hues.
+const UNIT_STROKE: Record<Faction, number> = {
+  [Faction.Player]: 0xb8d6ff,
+  [Faction.Enemy]: 0xff9a93,
+};
+
 const STATS_PANEL_WIDTH = 246;
 const STATS_PANEL_HEIGHT = 144;
 const HUD_MARGIN = 24;
@@ -431,10 +438,11 @@ export class GameScene extends Phaser.Scene implements GameContext {
     const py = this.originY + pos.y * this.tileSize;
     const radius = this.tileSize * 0.28;
     const role = unit.config.role;
+    const stroke = UNIT_STROKE[unit.faction];
 
     const body = this.add
       .circle(px, py, radius, UNIT_COLORS[role])
-      .setStrokeStyle(3, 0x0a1020, 0.8)
+      .setStrokeStyle(3, stroke, 0.9)
       .setInteractive({ useHandCursor: true });
 
     const initial = this.add
@@ -452,7 +460,7 @@ export class GameScene extends Phaser.Scene implements GameContext {
     });
     body.on('pointerover', () => body.setStrokeStyle(3, 0xf6f7fb, 0.9));
     body.on('pointerout', () => {
-      if (this.selectedUnitId !== unit.id) body.setStrokeStyle(3, 0x0a1020, 0.8);
+      if (this.selectedUnitId !== unit.id) body.setStrokeStyle(3, stroke, 0.9);
     });
   }
 
