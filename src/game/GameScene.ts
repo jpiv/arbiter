@@ -1,5 +1,16 @@
 import Phaser from 'phaser';
-import { BaseState, GameMap, GridPoint, TerrainKind, UnitRole, UnitState, WorldState, prototypeWorld } from './world';
+import { BaseState, Faction, GameMap, GridPoint, TerrainKind, UnitRole, UnitState, WorldState, prototypeWorld } from './world';
+
+interface BaseColors {
+  fill: number;
+  stroke: number;
+  inner: number;
+}
+
+const BASE_COLORS: Record<Faction, BaseColors> = {
+  [Faction.Player]: { fill: 0x3f6fb5, stroke: 0xb8d6ff, inner: 0x20395f },
+  [Faction.Enemy]: { fill: 0xb5443f, stroke: 0xffbdb8, inner: 0x5f2320 },
+};
 
 const TERRAIN_COLORS: Record<TerrainKind, number> = {
   [TerrainKind.Ground]: 0x253047,
@@ -32,6 +43,7 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor('#080d15');
     this.drawMap(this.world.map);
     this.drawBase(this.world.map, this.world.base);
+    this.drawBase(this.world.map, this.world.enemyBase);
     this.world.units.forEach((unit) => this.drawUnit(this.world.map, unit));
     this.drawHud();
     this.drawStatsPanel();
@@ -54,13 +66,14 @@ export class GameScene extends Phaser.Scene {
     const position = this.tileToWorld(map, base.position);
     const width = base.size.x * map.tileSize;
     const height = base.size.y * map.tileSize;
+    const colors = BASE_COLORS[base.faction];
 
     this.add
-      .rectangle(position.x, position.y, width, height, 0x3f6fb5, 0.92)
+      .rectangle(position.x, position.y, width, height, colors.fill, 0.92)
       .setOrigin(0)
-      .setStrokeStyle(3, 0xb8d6ff, 0.86);
+      .setStrokeStyle(3, colors.stroke, 0.86);
 
-    this.add.rectangle(position.x + width / 2, position.y + height / 2, width - 34, height - 34, 0x20395f, 0.78);
+    this.add.rectangle(position.x + width / 2, position.y + height / 2, width - 34, height - 34, colors.inner, 0.78);
     this.add.text(position.x + 16, position.y + 14, base.name, this.getLabelStyle('#f6f7fb', '18px'));
     this.add.text(position.x + 16, position.y + 42, `HP ${base.health}`, this.getLabelStyle('#c8d8f3', '13px'));
   }

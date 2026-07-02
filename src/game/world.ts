@@ -7,6 +7,7 @@ export enum TerrainKind {
 
 export enum Faction {
   Player = 'player',
+  Enemy = 'enemy',
 }
 
 export enum UnitRole {
@@ -58,6 +59,7 @@ export interface UnitState {
 export interface WorldState {
   map: GameMap;
   base: BaseState;
+  enemyBase: BaseState;
   units: UnitState[];
 }
 
@@ -110,6 +112,14 @@ export const prototypeWorld: WorldState = {
     name: 'Base Alpha',
     faction: Faction.Player,
     position: { x: 1, y: 3 },
+    size: { x: 3, y: 3 },
+    health: 100,
+  },
+  enemyBase: {
+    id: 'base-omega',
+    name: 'Base Omega',
+    faction: Faction.Enemy,
+    position: { x: 12, y: 3 },
     size: { x: 3, y: 3 },
     health: 100,
   },
