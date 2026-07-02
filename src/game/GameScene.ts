@@ -54,6 +54,12 @@ const ATTACK_INTERVAL_MS = 700;
 const PAN_KEY_SPEED = 900; // pixels/sec for keyboard + edge-scroll panning
 const EDGE_SCROLL_MARGIN = 28; // px band at each screen edge that triggers a pan
 
+// Camera zoom, via mouse wheel (toward the cursor) or +/- keys (toward center).
+const MIN_ZOOM = 0.5; // zoomed out far enough to take in most of the map
+const MAX_ZOOM = 2.5; // zoomed in for a close look
+const ZOOM_WHEEL_STEP = 1.12; // multiplicative zoom change per mouse-wheel notch
+const ZOOM_KEY_RATE = 2.2; // multiplicative zoom growth per second while +/- held
+
 export class GameScene extends Phaser.Scene implements GameContext {
   // The single source of truth for game state. The scene reads/writes through
   // it and it is the object that serializes into LLM context.
@@ -72,6 +78,8 @@ export class GameScene extends Phaser.Scene implements GameContext {
   private statsPanelText?: Phaser.GameObjects.Text;
   private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd?: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
+  private zoomInKey?: Phaser.Input.Keyboard.Key;
+  private zoomOutKey?: Phaser.Input.Keyboard.Key;
   private isDragPanning = false;
   private dragLastX = 0;
   private dragLastY = 0;
@@ -79,6 +87,10 @@ export class GameScene extends Phaser.Scene implements GameContext {
   // camera doesn't drift on load (pointer defaults to 0,0) or while the mouse
   // is outside the window.
   private pointerInWindow = false;
+  // A second camera locked at zoom 1 that renders only the HUD, so the on-screen
+  // UI keeps a fixed size and position while the main camera zooms and pans.
+  private uiCamera?: Phaser.Cameras.Scene2D.Camera;
+  private hudObjects: Phaser.GameObjects.GameObject[] = [];
 
   // The single interface every action flows through. Human input (below) and
   // LLM tool calls both invoke actions here.
@@ -119,7 +131,15 @@ export class GameScene extends Phaser.Scene implements GameContext {
   create(): void {
     this.cameras.main.setBackgroundColor('#080d15');
     this.input.mouse?.disableContextMenu();
+
+    // The HUD camera is transparent and never zooms/scrolls, so the UI stays put
+    // and unscaled over the zooming/panning main camera. layout() decides which
+    // objects each camera renders (see applyCameraLayers).
+    const { width, height } = this.scale.gameSize;
+    this.uiCamera = this.cameras.add(0, 0, width, height);
+
     this.setupPanControls();
+    this.setupZoomControls();
     this.layout();
 
     // Start looking at the player's own base rather than the map's top-left corner.
@@ -160,8 +180,9 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       if (!this.isDragPanning) return;
       const cam = this.cameras.main;
-      cam.scrollX -= pointer.x - this.dragLastX;
-      cam.scrollY -= pointer.y - this.dragLastY;
+      // Divide by zoom so the grabbed world point stays under the cursor.
+      cam.scrollX -= (pointer.x - this.dragLastX) / cam.zoom;
+      cam.scrollY -= (pointer.y - this.dragLastY) / cam.zoom;
       this.dragLastX = pointer.x;
       this.dragLastY = pointer.y;
     });
@@ -183,6 +204,38 @@ export class GameScene extends Phaser.Scene implements GameContext {
     });
   }
 
+  // Wire up zooming: mouse wheel zooms toward the cursor, +/- keys (polled in
+  // update) zoom toward the screen center.
+  private setupZoomControls(): void {
+    const keyboard = this.input.keyboard;
+    if (keyboard) {
+      this.zoomInKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.PLUS);
+      this.zoomOutKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.MINUS);
+    }
+
+    this.input.on(
+      Phaser.Input.Events.POINTER_WHEEL,
+      (pointer: Phaser.Input.Pointer, _over: unknown, _dx: number, deltaY: number) => {
+        const current = this.cameras.main.zoom;
+        this.zoomTo(deltaY > 0 ? current / ZOOM_WHEEL_STEP : current * ZOOM_WHEEL_STEP, pointer.x, pointer.y);
+      },
+    );
+  }
+
+  // Set the main camera zoom (clamped) while keeping the world point under
+  // (focusX, focusY) pinned to that same screen position.
+  private zoomTo(target: number, focusX: number, focusY: number): void {
+    const cam = this.cameras.main;
+    const newZoom = Phaser.Math.Clamp(target, MIN_ZOOM, MAX_ZOOM);
+    if (newZoom === cam.zoom) return;
+
+    const { width, height } = this.scale.gameSize;
+    const factor = 1 / cam.zoom - 1 / newZoom;
+    cam.scrollX += (focusX - width / 2) * factor;
+    cam.scrollY += (focusY - height / 2) * factor;
+    cam.setZoom(newZoom);
+  }
+
   // Rebuild the whole scene sized to the current viewport. Called on create and
   // on every window resize so the map always fills the window. Game state
   // (positions, orders, health) lives in GameState and survives across
@@ -191,9 +244,13 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.children.removeAll(true);
     this.unitViews.clear();
     this.baseViews.clear();
+    this.hudObjects = [];
     this.selectedUnitBody = undefined;
     this.selectedUnitMarker = undefined;
     this.statsPanelText = undefined;
+
+    const { width, height } = this.scale.gameSize;
+    this.uiCamera?.setSize(width, height);
 
     const map = this.gameState.getMap();
     this.computeMetrics(map);
@@ -203,12 +260,22 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.gameState.getUnits().forEach((unit) => this.drawUnit(unit));
     this.drawHud();
     this.drawStatsPanel();
+    this.applyCameraLayers();
 
     if (this.selectedUnitId) {
       const unit = this.gameState.getUnit(this.selectedUnitId);
       if (unit) this.selectUnit(unit);
       else this.selectedUnitId = undefined;
     }
+  }
+
+  // Split the display list between the two cameras: the main camera renders the
+  // world (and skips the HUD), the UI camera renders only the HUD.
+  private applyCameraLayers(): void {
+    if (!this.uiCamera) return;
+    const hud = new Set<Phaser.GameObjects.GameObject>(this.hudObjects);
+    this.cameras.main.ignore(this.hudObjects);
+    this.uiCamera.ignore(this.children.list.filter((obj) => !hud.has(obj)));
   }
 
   // Draw the map at a fixed tile size anchored at the world origin. The map is
@@ -292,42 +359,52 @@ export class GameScene extends Phaser.Scene implements GameContext {
 
   private drawHud(): void {
     const { height } = this.scale.gameSize;
-    this.add
-      .text(
+    this.registerHud(
+      this.add.text(
         HUD_MARGIN,
-        height - 52,
+        height - 74,
         'Click a unit to select it, then right-click a base to march in and attack.',
         this.getLabelStyle('#aeb8cc', '14px'),
-      )
-      .setScrollFactor(0);
-    this.add
-      .text(
+      ),
+      this.add.text(
+        HUD_MARGIN,
+        height - 52,
+        'Pan: WASD / arrow keys, push the mouse to a screen edge, or drag with the middle mouse button.',
+        this.getLabelStyle('#8592ab', '13px'),
+      ),
+      this.add.text(
         HUD_MARGIN,
         height - 30,
-        'Pan the map: WASD / arrow keys, push the mouse to a screen edge, or drag with the middle mouse button.',
+        'Zoom: mouse wheel (toward the cursor) or the + / - keys.',
         this.getLabelStyle('#8592ab', '13px'),
-      )
-      .setScrollFactor(0);
+      ),
+    );
   }
 
   private drawStatsPanel(): void {
     const x = this.scale.gameSize.width - STATS_PANEL_WIDTH - HUD_MARGIN;
     const y = HUD_MARGIN;
 
-    this.add
-      .rectangle(x, y, STATS_PANEL_WIDTH, STATS_PANEL_HEIGHT, 0x0f172a, 0.9)
-      .setOrigin(0)
-      .setStrokeStyle(1, 0x6b7a99, 0.6)
-      .setScrollFactor(0);
-    this.add.text(x + 16, y + 14, 'Selected Unit', this.getLabelStyle('#f6f7fb', '18px')).setScrollFactor(0);
-    this.statsPanelText = this.add
-      .text(x + 16, y + 48, this.selectedUnitId ? '' : 'None selected', {
-        color: '#aeb8cc',
-        fontFamily: 'Inter, system-ui, sans-serif',
-        fontSize: '14px',
-        lineSpacing: 8,
-      })
-      .setScrollFactor(0);
+    this.registerHud(
+      this.add.rectangle(x, y, STATS_PANEL_WIDTH, STATS_PANEL_HEIGHT, 0x0f172a, 0.9).setOrigin(0).setStrokeStyle(1, 0x6b7a99, 0.6),
+      this.add.text(x + 16, y + 14, 'Selected Unit', this.getLabelStyle('#f6f7fb', '18px')),
+    );
+    this.statsPanelText = this.add.text(x + 16, y + 48, this.selectedUnitId ? '' : 'None selected', {
+      color: '#aeb8cc',
+      fontFamily: 'Inter, system-ui, sans-serif',
+      fontSize: '14px',
+      lineSpacing: 8,
+    });
+    this.registerHud(this.statsPanelText);
+  }
+
+  // Mark objects as HUD: pinned on screen (scroll factor 0) and, via
+  // applyCameraLayers, rendered by the fixed-zoom UI camera instead of the world.
+  private registerHud(...objects: Phaser.GameObjects.GameObject[]): void {
+    for (const obj of objects) {
+      (obj as unknown as Phaser.GameObjects.Components.ScrollFactor).setScrollFactor(0);
+      this.hudObjects.push(obj);
+    }
   }
 
   private selectUnit(unit: UnitState): void {
@@ -344,6 +421,8 @@ export class GameScene extends Phaser.Scene implements GameContext {
 
     this.selectedUnitMarker?.destroy();
     this.selectedUnitMarker = this.add.circle(px, py, view.radius + 8, 0xffffff, 0).setStrokeStyle(3, 0xf6f7fb, 0.95);
+    // Created after applyCameraLayers, so keep it off the HUD camera explicitly.
+    this.uiCamera?.ignore(this.selectedUnitMarker);
     view.body.setStrokeStyle(3, 0xf6f7fb, 0.95);
 
     const { stats } = unit.config;
@@ -367,6 +446,7 @@ export class GameScene extends Phaser.Scene implements GameContext {
 
   update(_time: number, delta: number): void {
     this.updatePan(delta);
+    this.updateZoom(delta);
 
     this.gameState.getUnits().forEach((unit) => {
       const order = this.gameState.getUnitOrder(unit.id);
@@ -428,11 +508,25 @@ export class GameScene extends Phaser.Scene implements GameContext {
 
     if (dx === 0 && dy === 0) return;
 
-    const distance = (PAN_KEY_SPEED * delta) / 1000;
-    const length = Math.hypot(dx, dy);
     const cam = this.cameras.main;
+    // Divide by zoom so on-screen pan speed feels the same at every zoom level.
+    const distance = (PAN_KEY_SPEED * delta) / 1000 / cam.zoom;
+    const length = Math.hypot(dx, dy);
     cam.scrollX += (dx / length) * distance;
     cam.scrollY += (dy / length) * distance;
+  }
+
+  // Poll the +/- keys each frame and zoom toward the screen center.
+  private updateZoom(delta: number): void {
+    let dir = 0;
+    if (this.zoomInKey?.isDown) dir += 1;
+    if (this.zoomOutKey?.isDown) dir -= 1;
+    if (dir === 0) return;
+
+    const cam = this.cameras.main;
+    const step = Math.pow(ZOOM_KEY_RATE, delta / 1000);
+    const { width, height } = this.scale.gameSize;
+    this.zoomTo(dir > 0 ? cam.zoom * step : cam.zoom / step, width / 2, height / 2);
   }
 
   private updateUnitPosition(unitId: string): void {
