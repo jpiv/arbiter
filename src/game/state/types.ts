@@ -21,6 +21,7 @@ export interface BaseSnapshot {
   id: string;
   name: string;
   faction: Faction;
+  ownerId: string;
   position: { x: number; y: number };
   size: { x: number; y: number };
   health: number;
@@ -33,6 +34,7 @@ export interface UnitSnapshot {
   name: string;
   role: UnitRole;
   faction: Faction;
+  ownerId: string;
   position: { x: number; y: number };
   stats: UnitStats;
   order: UnitOrder;

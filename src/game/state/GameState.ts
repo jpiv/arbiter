@@ -34,7 +34,7 @@ export class GameState {
 
   constructor(world: WorldState) {
     this.map = world.map;
-    this.bases = [world.base, world.enemyBase];
+    this.bases = world.bases;
     this.units = world.units;
     this.resourceNodes = world.resourceNodes;
     for (const unit of this.units) {
@@ -160,6 +160,7 @@ export class GameState {
       id: base.id,
       name: base.name,
       faction: base.faction,
+      ownerId: base.ownerId,
       position: { x: base.position.x, y: base.position.y },
       size: { x: base.size.x, y: base.size.y },
       health: base.health,
@@ -173,6 +174,7 @@ export class GameState {
         name: unit.name,
         role: unit.config.role,
         faction: unit.faction,
+        ownerId: unit.ownerId,
         // Report the tile the unit occupies (integer grid coords), matching
         // how bases report position — sub-tile precision isn't useful here.
         position: {
@@ -220,8 +222,8 @@ export class GameState {
     for (const base of snapshot.bases) {
       const status = base.destroyed ? 'DESTROYED' : `HP ${base.health}`;
       lines.push(
-        `- ${base.name} [${base.id}] — ${base.faction}, at [${base.position.x},${base.position.y}], ` +
-          `${base.size.x}x${base.size.y} tiles — ${status}`,
+        `- ${base.name} [${base.id}] — ${base.faction}, owned by [${base.ownerId}], ` +
+          `at [${base.position.x},${base.position.y}], ${base.size.x}x${base.size.y} tiles — ${status}`,
       );
     }
 
@@ -241,7 +243,8 @@ export class GameState {
     lines.push('Units:');
     for (const unit of snapshot.units) {
       lines.push(
-        `- ${unit.name} [${unit.id}] — ${unit.faction} ${unit.role}, at [${unit.position.x},${unit.position.y}] — ` +
+        `- ${unit.name} [${unit.id}] — ${unit.faction} ${unit.role}, owned by [${unit.ownerId}], ` +
+          `at [${unit.position.x},${unit.position.y}] — ` +
           `HP ${unit.stats.hp}, power ${unit.stats.power}, range ${unit.stats.range}, speed ${unit.stats.speed} — ` +
           `${describeOrder(unit.order)}`,
       );
