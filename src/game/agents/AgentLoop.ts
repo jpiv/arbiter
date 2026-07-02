@@ -116,9 +116,16 @@ export class AgentLoop {
     let answer = '';
     let errored = false;
 
+    // Identity: several players can share a faction (e.g. multiple enemies), so
+    // the agent needs to know exactly which player it is to pick out its own
+    // units — the game state marks each unit's owner.
+    const identity =
+      `You are playing as ${player.name} [${player.id}], commanding the ${player.faction} ` +
+      `faction. You may only command units owned by [${player.id}].`;
+
     try {
       await runAgent({
-        system: `${agent.playPrompt}\n\n=== YOUR STANDING DIRECTIVE ===\n${directive}`,
+        system: `${agent.playPrompt}\n\n${identity}\n\n=== YOUR STANDING DIRECTIVE ===\n${directive}`,
         buildStateText: this.deps.buildStateText,
         history,
         toolset: this.deps.toolsetFor(player.id),

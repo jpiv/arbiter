@@ -21,11 +21,12 @@ export enum UnitRole {
 export type ControllerKind = 'user' | 'ai';
 
 /**
- * A player in the game. Multiplayer-ready: many of these will exist, all
- * agent-driven in the long run, one per faction seat. Serializable — holds no
- * live objects. Ownership of bases/units stays implicit via {@link faction}.
- * Defined here (not in state/) so world.ts stays dependency-free and avoids a
- * circular import with state/types.ts, which imports from this file.
+ * A player in the game. Multiplayer-ready: many of these exist, all agent-driven,
+ * and any number can share a faction (team). Each base/unit names its owning
+ * player via `ownerId`; `faction` is only the team (used for coloring and the
+ * win condition). Serializable — holds no live objects. Defined here (not in
+ * state/) so world.ts stays dependency-free and avoids a circular import with
+ * state/types.ts, which imports from this file.
  */
 export interface PlayerRecord {
   id: string;
@@ -66,6 +67,8 @@ export interface BaseState {
   id: string;
   name: string;
   faction: Faction;
+  // The player that owns this base (PlayerRecord.id).
+  ownerId: string;
   position: GridPoint;
   size: GridPoint;
   health: number;
@@ -76,15 +79,17 @@ export interface UnitState {
   name: string;
   config: UnitConfig;
   faction: Faction;
+  // The player that owns/commands this unit (PlayerRecord.id).
+  ownerId: string;
   position: GridPoint;
 }
 
 export interface WorldState {
   map: GameMap;
-  base: BaseState;
-  enemyBase: BaseState;
+  // Every base in the match (one per seat), player and enemy alike.
+  bases: BaseState[];
   units: UnitState[];
-  // The players in the match. Today: just the one human seat (see prototypeWorld).
+  // Every player in the match — see prototypeWorld / SEATS below.
   players: PlayerRecord[];
 }
 
@@ -136,8 +141,116 @@ const MAP_COLUMNS = 60;
 const MAP_ROWS = 24;
 const MAP_TILE_SIZE = 54;
 
-const PLAYER_BASE = { position: { x: 18, y: 10 }, size: { x: 3, y: 3 } };
-const ENEMY_BASE = { position: { x: 39, y: 10 }, size: { x: 3, y: 3 } };
+const DEFAULT_BASE_SIZE: GridPoint = { x: 3, y: 3 };
+const DEFAULT_BASE_HEALTH = 100;
+
+// The standing "play to win" plan every enemy starts with, so the autonomous
+// loop drives it from the first tick (an empty directive would stay passive).
+// Phrased without hard-coded ids — the agent reads the state to find the player
+// base — so it holds however many players are in the match.
+const ENEMY_DIRECTIVE =
+  "Win the game: destroy the player's base and eliminate their forces while keeping your own " +
+  'base alive. Advance your units on the player base and press the attack — do not stall.';
+
+// One player in the match: a base placement, some starting units, the agent that
+// commands it, and its team. The whole world (players, bases, units) is generated
+// from this list, so adding another player — friend or foe — is just one more
+// entry here; no other code changes.
+interface SeatSpec {
+  id: string;
+  name: string;
+  faction: Faction;
+  controller: ControllerKind;
+  agentId: string;
+  directive: string;
+  basePosition: GridPoint;
+  baseSize?: GridPoint;
+  baseHealth?: number;
+  // Roles to spawn near the base at game start, in order.
+  startingUnits: UnitRole[];
+}
+
+// The human commander.
+const PLAYER_SEAT: SeatSpec = {
+  id: 'player-1',
+  name: 'Commander',
+  faction: Faction.Player,
+  controller: 'user',
+  agentId: 'arbiter-prime',
+  directive: '',
+  basePosition: { x: 18, y: 10 },
+  startingUnits: [UnitRole.Scout, UnitRole.Soldier, UnitRole.RangedSoldier, UnitRole.Builder],
+};
+
+// The AI opponents. Add or remove entries to change how many enemies the match
+// starts with; each becomes its own agent-driven player with a base and one
+// soldier. They share the Enemy team, so the player wins by destroying every
+// enemy base (see GameState.getOutcome).
+const ENEMY_SEATS: SeatSpec[] = [
+  {
+    id: 'enemy-1',
+    name: 'Adversary I',
+    faction: Faction.Enemy,
+    controller: 'ai',
+    agentId: 'adversary-prime',
+    directive: ENEMY_DIRECTIVE,
+    basePosition: { x: 40, y: 5 },
+    startingUnits: [UnitRole.Soldier],
+  },
+  {
+    id: 'enemy-2',
+    name: 'Adversary II',
+    faction: Faction.Enemy,
+    controller: 'ai',
+    agentId: 'adversary-prime',
+    directive: ENEMY_DIRECTIVE,
+    basePosition: { x: 40, y: 17 },
+    startingUnits: [UnitRole.Soldier],
+  },
+];
+
+// Every seat in the match. Order is cosmetic; the human need not be first.
+const SEATS: SeatSpec[] = [PLAYER_SEAT, ...ENEMY_SEATS];
+
+function seatBaseSize(seat: SeatSpec): GridPoint {
+  return seat.baseSize ?? DEFAULT_BASE_SIZE;
+}
+
+function buildBase(seat: SeatSpec): BaseState {
+  return {
+    id: `base-${seat.id}`,
+    name: `${seat.name} Base`,
+    faction: seat.faction,
+    ownerId: seat.id,
+    position: seat.basePosition,
+    size: seatBaseSize(seat),
+    health: seat.baseHealth ?? DEFAULT_BASE_HEALTH,
+  };
+}
+
+function buildUnits(seat: SeatSpec): UnitState[] {
+  const size = seatBaseSize(seat);
+  // Line the starting units up in a row just below the seat's base.
+  return seat.startingUnits.map((role, i) => ({
+    id: `unit-${seat.id}-${i + 1}`,
+    name: `${seat.name} ${role}`,
+    config: UNIT_CONFIGS[role],
+    faction: seat.faction,
+    ownerId: seat.id,
+    position: { x: seat.basePosition.x + i, y: seat.basePosition.y + size.y },
+  }));
+}
+
+function buildPlayer(seat: SeatSpec): PlayerRecord {
+  return {
+    id: seat.id,
+    name: seat.name,
+    faction: seat.faction,
+    controller: seat.controller,
+    agentId: seat.agentId,
+    directive: seat.directive,
+  };
+}
 
 // Small deterministic PRNG (mulberry32) so the generated map is identical on
 // every load rather than reshuffling on each refresh.
@@ -179,10 +292,13 @@ function generateTerrain(columns: number, rows: number, seed = 20260701): Terrai
     stamp(Math.floor(rand() * columns), Math.floor(rand() * rows), 1 + Math.floor(rand() * 3), kind);
   }
 
-  // Carve a clear ground staging area around each base so nobody spawns on a lake.
-  for (const base of [PLAYER_BASE, ENEMY_BASE]) {
-    for (let y = base.position.y - 2; y < base.position.y + base.size.y + 2; y++) {
-      for (let x = base.position.x - 2; x < base.position.x + base.size.x + 2; x++) {
+  // Carve a clear ground staging area around every seat's base (and the units
+  // spawned just below it) so nobody starts on a lake or ridge.
+  for (const seat of SEATS) {
+    const size = seatBaseSize(seat);
+    const { x: bx, y: by } = seat.basePosition;
+    for (let y = by - 2; y < by + size.y + 2; y++) {
+      for (let x = bx - 2; x < bx + size.x + 2; x++) {
         if (inBounds(x, y)) terrain[y][x] = TerrainKind.Ground;
       }
     }
@@ -191,6 +307,8 @@ function generateTerrain(columns: number, rows: number, seed = 20260701): Terrai
   return terrain;
 }
 
+// The starting match, generated entirely from SEATS: one base, its starting
+// units and a player record per seat. Change the roster by editing SEATS above.
 export const prototypeWorld: WorldState = {
   map: {
     columns: MAP_COLUMNS,
@@ -198,95 +316,7 @@ export const prototypeWorld: WorldState = {
     tileSize: MAP_TILE_SIZE,
     terrain: generateTerrain(MAP_COLUMNS, MAP_ROWS),
   },
-  base: {
-    id: 'base-alpha',
-    name: 'Base Alpha',
-    faction: Faction.Player,
-    position: PLAYER_BASE.position,
-    size: PLAYER_BASE.size,
-    health: 100,
-  },
-  enemyBase: {
-    id: 'base-omega',
-    name: 'Base Omega',
-    faction: Faction.Enemy,
-    position: ENEMY_BASE.position,
-    size: ENEMY_BASE.size,
-    health: 100,
-  },
-  units: [
-    {
-      id: 'unit-scout-1',
-      name: 'Scout 1',
-      config: UNIT_CONFIGS[UnitRole.Scout],
-      faction: Faction.Player,
-      position: { x: 22, y: 10 },
-    },
-    {
-      id: 'unit-soldier-1',
-      name: 'Soldier 1',
-      config: UNIT_CONFIGS[UnitRole.Soldier],
-      faction: Faction.Player,
-      position: { x: 22, y: 11 },
-    },
-    {
-      id: 'unit-ranged-1',
-      name: 'Ranged 1',
-      config: UNIT_CONFIGS[UnitRole.RangedSoldier],
-      faction: Faction.Player,
-      position: { x: 21, y: 11 },
-    },
-    {
-      id: 'unit-builder-1',
-      name: 'Builder 1',
-      config: UNIT_CONFIGS[UnitRole.Builder],
-      faction: Faction.Player,
-      position: { x: 21, y: 12 },
-    },
-    // Enemy forces, staged near Base Omega and commanded by the opponent agent.
-    {
-      id: 'unit-enemy-scout-1',
-      name: 'Enemy Scout',
-      config: UNIT_CONFIGS[UnitRole.Scout],
-      faction: Faction.Enemy,
-      position: { x: 37, y: 10 },
-    },
-    {
-      id: 'unit-enemy-soldier-1',
-      name: 'Enemy Soldier',
-      config: UNIT_CONFIGS[UnitRole.Soldier],
-      faction: Faction.Enemy,
-      position: { x: 37, y: 11 },
-    },
-    {
-      id: 'unit-enemy-builder-1',
-      name: 'Enemy Builder',
-      config: UNIT_CONFIGS[UnitRole.Builder],
-      faction: Faction.Enemy,
-      position: { x: 38, y: 12 },
-    },
-  ],
-  // Two seats: the human (Arbiter Prime), passive until given a directive, and
-  // the AI opponent (Adversary Prime), which starts with a standing win plan so
-  // the autonomous loop drives it from the first tick.
-  players: [
-    {
-      id: 'player-1',
-      name: 'Commander',
-      faction: Faction.Player,
-      controller: 'user',
-      agentId: 'arbiter-prime',
-      directive: '',
-    },
-    {
-      id: 'player-2',
-      name: 'Adversary',
-      faction: Faction.Enemy,
-      controller: 'ai',
-      agentId: 'adversary-prime',
-      directive:
-        'Win the game: mass your units and destroy the player base [base-alpha], while keeping ' +
-        'your own base [base-omega] alive. Press the attack and do not stall.',
-    },
-  ],
+  bases: SEATS.map(buildBase),
+  units: SEATS.flatMap(buildUnits),
+  players: SEATS.map(buildPlayer),
 };

@@ -224,15 +224,14 @@ export class GameScene extends Phaser.Scene implements GameContext {
   }
 
   getUnitsForPlayer(playerId: string): readonly UnitState[] {
-    const player = this.players.getPlayer(playerId);
-    if (!player) return [];
-    return this.gameState.getUnits().filter((unit) => unit.faction === player.faction);
+    // Ownership is per-player (via ownerId), not per-team, so several players can
+    // share a faction and still command only their own units.
+    return this.gameState.getUnits().filter((unit) => unit.ownerId === playerId);
   }
 
   playerOwnsUnit(playerId: string, unitId: string): boolean {
-    const player = this.players.getPlayer(playerId);
     const unit = this.gameState.getUnit(unitId);
-    return !!player && !!unit && unit.faction === player.faction;
+    return !!unit && unit.ownerId === playerId;
   }
 
   setPlayerDirective(playerId: string, directive: string): boolean {
@@ -254,8 +253,8 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.setupUnitOrders();
     this.layout();
 
-    // Start looking at the player's own base rather than the map's top-left corner.
-    const base = this.gameState.getBases().find((candidate) => candidate.faction === Faction.Player);
+    // Start looking at the human's own base rather than the map's top-left corner.
+    const base = this.gameState.getBases().find((candidate) => candidate.ownerId === this.humanPlayerId);
     if (base) {
       this.cameras.main.centerOn(
         (base.position.x + base.size.x / 2) * this.tileSize,
