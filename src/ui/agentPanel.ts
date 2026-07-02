@@ -13,6 +13,10 @@ export interface AgentPanelDeps {
   // focus/blur so the game doesn't capture the keys the user is trying to type
   // (SPACE, WASD, the arrows and ±, all bound to camera pan/zoom).
   setGameKeyboardEnabled?: (enabled: boolean) => void;
+  // Publishes whether the human is mid-chat with their agent, so the autonomous
+  // loop defers to this direct control (mode 1 preempts mode 2). Set true while a
+  // reply is streaming, false when it ends.
+  setChatBusy?: (busy: boolean) => void;
   agents?: Agent[];
 }
 
@@ -26,6 +30,7 @@ export class AgentPanel {
   private readonly toolset: GameToolset;
   private readonly buildStateText: () => string;
   private readonly setGameKeyboardEnabled: (enabled: boolean) => void;
+  private readonly setChatBusy: (busy: boolean) => void;
   private readonly conversations = new Map<string, ChatMessage[]>();
 
   private activeAgent?: Agent;
@@ -48,6 +53,7 @@ export class AgentPanel {
     this.toolset = deps.toolset;
     this.buildStateText = deps.buildStateText;
     this.setGameKeyboardEnabled = deps.setGameKeyboardEnabled ?? (() => {});
+    this.setChatBusy = deps.setChatBusy ?? (() => {});
     this.agents = deps.agents ?? AGENTS;
   }
 
@@ -237,6 +243,8 @@ export class AgentPanel {
     this.autoGrow();
 
     this.abortController = new AbortController();
+    // Tell the autonomous loop to hold off while the human is steering directly.
+    this.setChatBusy(true);
     this.updateSendButton();
 
     // The agent may take several model turns (calling tools between them). Each
@@ -256,7 +264,7 @@ export class AgentPanel {
     };
 
     void runAgent({
-      system: agent.systemPrompt,
+      system: agent.commandPrompt,
       buildStateText: this.buildStateText,
       history,
       toolset: this.toolset,
@@ -293,11 +301,13 @@ export class AgentPanel {
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = undefined;
+      this.setChatBusy(false);
     }
   }
 
   private finishStream(): void {
     this.abortController = undefined;
+    this.setChatBusy(false);
     this.updateSendButton();
   }
 

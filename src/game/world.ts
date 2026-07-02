@@ -16,6 +16,27 @@ export enum UnitRole {
   Builder = 'Builder',
 }
 
+/** Who drives a player: the human at the keyboard, or an autonomous agent loop. */
+export type ControllerKind = 'user' | 'ai';
+
+/**
+ * A player in the game. Multiplayer-ready: many of these will exist, all
+ * agent-driven in the long run, one per faction seat. Serializable — holds no
+ * live objects. Ownership of bases/units stays implicit via {@link faction}.
+ * Defined here (not in state/) so world.ts stays dependency-free and avoids a
+ * circular import with state/types.ts, which imports from this file.
+ */
+export interface PlayerRecord {
+  id: string;
+  name: string;
+  faction: Faction;
+  controller: ControllerKind;
+  // Joins to an Agent def in agents.ts (its command/play prompts).
+  agentId: string;
+  // Standing operating plan the autonomous loop reads each tick; '' = none.
+  directive: string;
+}
+
 export interface UnitStats {
   speed: number;
   range: number;
@@ -62,6 +83,8 @@ export interface WorldState {
   base: BaseState;
   enemyBase: BaseState;
   units: UnitState[];
+  // The players in the match. Today: just the one human seat (see prototypeWorld).
+  players: PlayerRecord[];
 }
 
 export const UNIT_CONFIGS: Record<UnitRole, UnitConfig> = {
@@ -199,6 +222,18 @@ export const prototypeWorld: WorldState = {
       config: UNIT_CONFIGS[UnitRole.Builder],
       faction: Faction.Player,
       position: { x: 21, y: 12 },
+    },
+  ],
+  // One seat for now: the human, commanded by Arbiter Prime. Empty directive
+  // means the autonomous loop stays passive until the player gives it a plan.
+  players: [
+    {
+      id: 'player-1',
+      name: 'Commander',
+      faction: Faction.Player,
+      controller: 'user',
+      agentId: 'arbiter-prime',
+      directive: '',
     },
   ],
 };

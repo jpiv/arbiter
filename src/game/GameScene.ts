@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { BaseState, Faction, GameMap, GridPoint, TerrainKind, UnitRole, UnitState, WorldState, prototypeWorld } from './world';
 import { AttackTarget, GameContext, GameInterface, GameToolset } from './actions';
-import { GameState } from './state';
+import { GameState, PlayerRegistry } from './state';
 
 interface BaseColors {
   fill: number;
@@ -92,21 +92,58 @@ export class GameScene extends Phaser.Scene implements GameContext {
   private uiCamera?: Phaser.Cameras.Scene2D.Camera;
   private hudObjects: Phaser.GameObjects.GameObject[] = [];
 
-  // The single interface every action flows through. Human input (below) and
-  // LLM tool calls both invoke actions here.
-  private readonly gameInterface = new GameInterface(this);
-  // LLM tool wrapper around the interface. Not wired to a model yet — this is
-  // the handle future LLM code uses to get tool specs and dispatch tool calls.
-  readonly commandTools = new GameToolset(this.gameInterface);
+  // The players in the match (their controller, linked agent and directive).
+  private readonly players: PlayerRegistry;
+  // The human seat's id, used to route mouse input through that player's door.
+  private readonly humanPlayerId: string;
+
+  // One action interface + tool wrapper per player, built and cached on demand.
+  // Every action a player takes — LLM tool call or (routed) human input — flows
+  // through its bound interface, so each stays the single door for that player.
+  private readonly interfaces = new Map<string, GameInterface>();
+  private readonly toolsets = new Map<string, GameToolset>();
 
   constructor(world: WorldState = prototypeWorld) {
     super('GameScene');
     this.gameState = new GameState(world);
+    this.players = new PlayerRegistry(world.players);
+    this.humanPlayerId = this.players.getPlayerByFaction(Faction.Player)?.id ?? '';
   }
 
   /** The shared game state, for other parts of the app (HUD, LLM context, …). */
   getState(): GameState {
     return this.gameState;
+  }
+
+  /** The players registry, for other parts of the app (LLM context, dev console). */
+  getPlayers(): PlayerRegistry {
+    return this.players;
+  }
+
+  /** The human player's id — what the agent panel and dev console act as. */
+  getUserPlayerId(): string {
+    return this.humanPlayerId;
+  }
+
+  /** The action interface bound to `playerId`. Cached so a session reuses one door. */
+  private interfaceFor(playerId: string): GameInterface {
+    let iface = this.interfaces.get(playerId);
+    if (!iface) {
+      iface = new GameInterface(this, { playerId });
+      this.interfaces.set(playerId, iface);
+    }
+    return iface;
+  }
+
+  /** The LLM tool wrapper bound to `playerId`. Every order it issues is that
+   *  player's. Hand this to an agent session (chat panel or autonomous loop). */
+  toolsetFor(playerId: string): GameToolset {
+    let toolset = this.toolsets.get(playerId);
+    if (!toolset) {
+      toolset = new GameToolset(this.interfaceFor(playerId));
+      this.toolsets.set(playerId, toolset);
+    }
+    return toolset;
   }
 
   /**
@@ -159,6 +196,22 @@ export class GameScene extends Phaser.Scene implements GameContext {
     // orderMove replaces whatever order the unit had, so a move automatically
     // supersedes any attack (and vice versa) — the two are mutually exclusive.
     this.gameState.orderMove(unitId, tileX, tileY);
+  }
+
+  getUnitsForPlayer(playerId: string): readonly UnitState[] {
+    const player = this.players.getPlayer(playerId);
+    if (!player) return [];
+    return this.gameState.getUnits().filter((unit) => unit.faction === player.faction);
+  }
+
+  playerOwnsUnit(playerId: string, unitId: string): boolean {
+    const player = this.players.getPlayer(playerId);
+    const unit = this.gameState.getUnit(unitId);
+    return !!player && !!unit && unit.faction === player.faction;
+  }
+
+  setPlayerDirective(playerId: string, directive: string): boolean {
+    return this.players.setDirective(playerId, directive);
   }
 
   create(): void {
@@ -463,7 +516,10 @@ export class GameScene extends Phaser.Scene implements GameContext {
   // an LLM tool call will.
   private orderAttack(base: BaseState): void {
     if (!this.selectedUnitId) return;
-    this.gameInterface.invoke('attack', { unitId: this.selectedUnitId, targetId: base.id });
+    this.interfaceFor(this.humanPlayerId).invoke('attack', {
+      unitId: this.selectedUnitId,
+      targetId: base.id,
+    });
   }
 
   // Order the currently selected unit to the grid tile under the pointer. Like
@@ -473,7 +529,11 @@ export class GameScene extends Phaser.Scene implements GameContext {
     if (!this.selectedUnitId) return;
     const tileX = Math.floor((pointer.worldX - this.originX) / this.tileSize);
     const tileY = Math.floor((pointer.worldY - this.originY) / this.tileSize);
-    this.gameInterface.invoke('move', { unitId: this.selectedUnitId, x: tileX, y: tileY });
+    this.interfaceFor(this.humanPlayerId).invoke('move', {
+      unitId: this.selectedUnitId,
+      x: tileX,
+      y: tileY,
+    });
   }
 
   update(_time: number, delta: number): void {

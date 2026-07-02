@@ -1,4 +1,4 @@
-import { Faction, UnitRole, UnitStats } from '../world';
+import { ControllerKind, Faction, UnitRole, UnitStats } from '../world';
 
 /** What a unit is currently doing. Extend as new orders are added. */
 export type UnitOrder =
@@ -39,4 +39,18 @@ export interface GameStateSnapshot {
   map: { columns: number; rows: number };
   bases: BaseSnapshot[];
   units: UnitSnapshot[];
+}
+
+/**
+ * A player as seen in a state snapshot. Omits transient coordination state (e.g.
+ * whether the human is mid-chat) — only the durable, serializable fields. Lives
+ * in the PlayerRegistry's own snapshot, composed alongside GameStateSnapshot.
+ */
+export interface PlayerSnapshot {
+  id: string;
+  name: string;
+  faction: Faction;
+  controller: ControllerKind;
+  agentId: string;
+  directive: string;
 }

@@ -1,4 +1,5 @@
-import type { GameState } from '../game/state';
+import type { GameState, PlayerRegistry } from '../game/state';
+import type { AgentLoopSink } from '../game/agents/AgentLoop';
 import './devConsole.css';
 
 // How often the live view refreshes while the console is open (ms). Fast enough
@@ -6,34 +7,53 @@ import './devConsole.css';
 // leave running.
 const REFRESH_MS = 250;
 
-type DevView = 'json' | 'text';
+// Cap on the autonomous-tick log so it can be left running all game.
+const AGENT_LOG_LIMIT = 300;
+
+type DevView = 'json' | 'text' | 'agent';
 
 // Developer overlay for inspecting live game state. A floating launcher (bottom
 // right, opposite the agent panel) opens a docked panel that re-reads the
-// GameState snapshot on a timer, so it always mirrors what the simulation is
-// doing right now. Two views: the JSON snapshot (the canonical serialized form)
-// and the compact prompt text handed to an LLM.
+// GameState + PlayerRegistry snapshots on a timer, so it always mirrors what the
+// simulation is doing right now. Three views: the JSON snapshot (the canonical
+// serialized form), the compact prompt text handed to an LLM, and an Agent log
+// that surfaces what the autonomous loop does each tick (kept out of the chat).
 export class DevConsole {
   private readonly getState: () => GameState;
+  private readonly getPlayers: () => PlayerRegistry;
 
   private view: DevView = 'json';
   private timer?: number;
+  // Autonomous-tick log lines, oldest first, written by the AgentLoop sink.
+  private readonly agentLog: string[] = [];
 
   // DOM references, wired up once in build().
   private root!: HTMLDivElement;
   private body!: HTMLPreElement;
   private jsonTab!: HTMLButtonElement;
   private textTab!: HTMLButtonElement;
+  private agentTab!: HTMLButtonElement;
   private copyBtn!: HTMLButtonElement;
 
-  constructor(getState: () => GameState) {
+  constructor(getState: () => GameState, getPlayers: () => PlayerRegistry) {
     this.getState = getState;
+    this.getPlayers = getPlayers;
   }
 
   mount(parent: HTMLElement = document.body): void {
     this.build();
     parent.appendChild(this.root);
   }
+
+  // The sink handed to the AgentLoop: it appends readable lines to the agent log.
+  readonly agentSink: AgentLoopSink = {
+    onTickStart: (playerId) => this.log(`${playerId}: tick start`),
+    onToolActivity: (playerId, activity) =>
+      this.log(`${playerId}:   ${activity.ok ? '⚙' : '⚠'} ${activity.message || activity.name}`),
+    onAnswer: (playerId, text) => this.log(`${playerId}:   "${text}"`),
+    onTickEnd: (playerId, status, detail) =>
+      this.log(`${playerId}: ${status}${detail ? ` (${detail})` : ''}`),
+  };
 
   // ---- construction ---------------------------------------------------------
 
@@ -62,7 +82,8 @@ export class DevConsole {
     const tabs = el('div', 'dev-tabs');
     this.jsonTab = tabButton('JSON', () => this.setView('json'));
     this.textTab = tabButton('Prompt', () => this.setView('text'));
-    tabs.append(this.jsonTab, this.textTab);
+    this.agentTab = tabButton('Agent', () => this.setView('agent'));
+    tabs.append(this.jsonTab, this.textTab, this.agentTab);
 
     this.copyBtn = iconButton('⧉', 'Copy to clipboard', () => this.copy());
     const closeBtn = iconButton('✕', 'Close console', () => this.close());
@@ -81,7 +102,7 @@ export class DevConsole {
     this.root.dataset.open = 'true';
     this.render();
     // Poll instead of hooking the sim loop so this stays fully decoupled from
-    // the scene — it only ever reads through the getState callback.
+    // the scene — it only ever reads through the getState/getPlayers callbacks.
     this.timer = window.setInterval(() => this.render(), REFRESH_MS);
   }
 
@@ -101,16 +122,30 @@ export class DevConsole {
   // ---- rendering ------------------------------------------------------------
 
   private content(): string {
+    if (this.view === 'agent') {
+      return this.agentLog.length ? this.agentLog.join('\n') : 'No autonomous ticks yet.';
+    }
     const state = this.getState();
-    return this.view === 'json'
-      ? JSON.stringify(state.snapshot(), null, 2)
-      : state.toPromptText();
+    const players = this.getPlayers();
+    if (this.view === 'json') {
+      return JSON.stringify({ ...state.snapshot(), players: players.snapshot() }, null, 2);
+    }
+    return `${state.toPromptText()}\n\n${players.toPromptText()}`;
   }
 
   private render(): void {
     this.jsonTab.classList.toggle('is-active', this.view === 'json');
     this.textTab.classList.toggle('is-active', this.view === 'text');
+    this.agentTab.classList.toggle('is-active', this.view === 'agent');
     this.body.textContent = this.content();
+  }
+
+  // Append a line to the autonomous-tick log, trimming to the cap. Re-renders
+  // immediately if the console is open on the agent view.
+  private log(line: string): void {
+    this.agentLog.push(line);
+    while (this.agentLog.length > AGENT_LOG_LIMIT) this.agentLog.shift();
+    if (this.root?.dataset.open === 'true' && this.view === 'agent') this.render();
   }
 
   private copy(): void {
