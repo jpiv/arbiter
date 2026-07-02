@@ -1,0 +1,40 @@
+import { Faction, UnitRole, UnitStats } from '../world';
+
+/** What a unit is currently doing. Extend as new orders are added. */
+export type UnitOrder =
+  | { kind: 'idle' }
+  | { kind: 'attack'; targetId: string };
+
+/** A base as seen in a state snapshot (serializable, no live-object refs). */
+export interface BaseSnapshot {
+  id: string;
+  name: string;
+  faction: Faction;
+  position: { x: number; y: number };
+  size: { x: number; y: number };
+  health: number;
+  destroyed: boolean;
+}
+
+/** A unit as seen in a state snapshot. `position` is the tile it occupies. */
+export interface UnitSnapshot {
+  id: string;
+  name: string;
+  role: UnitRole;
+  faction: Faction;
+  position: { x: number; y: number };
+  stats: UnitStats;
+  order: UnitOrder;
+}
+
+/**
+ * A plain, JSON-serializable picture of the whole game at one instant. This is
+ * the canonical serialized form — safe to `JSON.stringify`, send to a server,
+ * or hand to an LLM as structured tool output. `GameState.toPromptText()`
+ * renders the same data as a compact text block for prompt injection.
+ */
+export interface GameStateSnapshot {
+  map: { columns: number; rows: number };
+  bases: BaseSnapshot[];
+  units: UnitSnapshot[];
+}
