@@ -96,12 +96,12 @@ export const UNIT_CONFIGS: Record<UnitRole, UnitConfig> = {
 
 // A large map so there is more world than fits on screen at once, which is what
 // makes the pan controls (see GameScene) meaningful.
-const MAP_COLUMNS = 40;
+const MAP_COLUMNS = 60;
 const MAP_ROWS = 24;
 const MAP_TILE_SIZE = 54;
 
 const PLAYER_BASE = { position: { x: 3, y: 10 }, size: { x: 3, y: 3 } };
-const ENEMY_BASE = { position: { x: 34, y: 10 }, size: { x: 3, y: 3 } };
+const ENEMY_BASE = { position: { x: 54, y: 10 }, size: { x: 3, y: 3 } };
 
 // Small deterministic PRNG (mulberry32) so the generated map is identical on
 // every load rather than reshuffling on each refresh.
