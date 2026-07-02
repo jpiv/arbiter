@@ -18,6 +18,7 @@ export enum UnitRole {
 
 export interface UnitStats {
   speed: number;
+  range: number;
   hp: number;
   power: number;
 }
@@ -68,6 +69,7 @@ export const UNIT_CONFIGS: Record<UnitRole, UnitConfig> = {
     role: UnitRole.Builder,
     stats: {
       speed: 3,
+      range: 1,
       hp: 90,
       power: 8,
     },
@@ -76,6 +78,7 @@ export const UNIT_CONFIGS: Record<UnitRole, UnitConfig> = {
     role: UnitRole.Scout,
     stats: {
       speed: 6,
+      range: 3,
       hp: 70,
       power: 10,
     },
@@ -84,6 +87,7 @@ export const UNIT_CONFIGS: Record<UnitRole, UnitConfig> = {
     role: UnitRole.Soldier,
     stats: {
       speed: 4,
+      range: 2,
       hp: 120,
       power: 22,
     },

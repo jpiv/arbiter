@@ -7,10 +7,26 @@ interface BaseColors {
   inner: number;
 }
 
-interface UnitGeometry {
-  center: GridPoint;
-  radius: number;
+// Visual objects for a unit. Rebuilt from scratch on every layout/resize.
+interface UnitView {
   body: Phaser.GameObjects.Arc;
+  initial: Phaser.GameObjects.Text;
+  roleLabel: Phaser.GameObjects.Text;
+  radius: number;
+}
+
+// Movement/combat state for a unit. Lives in grid-space so it is independent of
+// tile size, and persists across layout rebuilds (unlike the visuals above).
+interface UnitRuntime {
+  cx: number; // fractional grid coordinate of the unit's center (x)
+  cy: number; // fractional grid coordinate of the unit's center (y)
+  targetBase?: BaseState;
+  attackTimer: number;
+}
+
+interface BaseView {
+  base: BaseState;
+  hpText: Phaser.GameObjects.Text;
 }
 
 const BASE_COLORS: Record<Faction, BaseColors> = {
@@ -35,9 +51,16 @@ const STATS_PANEL_WIDTH = 246;
 const STATS_PANEL_HEIGHT = 144;
 const HUD_MARGIN = 24;
 
+// A unit's `speed` stat is interpreted as this many tiles travelled per second.
+const SPEED_TILES_PER_SEC = 0.5;
+// How often an in-range unit lands a hit on a base (milliseconds).
+const ATTACK_INTERVAL_MS = 700;
+
 export class GameScene extends Phaser.Scene {
   private readonly world: WorldState;
-  private readonly unitGeometry = new Map<string, UnitGeometry>();
+  private readonly unitViews = new Map<string, UnitView>();
+  private readonly unitRuntime = new Map<string, UnitRuntime>();
+  private readonly baseViews = new Map<string, BaseView>();
   private tileSize = 0;
   private originX = 0;
   private originY = 0;
@@ -53,6 +76,7 @@ export class GameScene extends Phaser.Scene {
 
   create(): void {
     this.cameras.main.setBackgroundColor('#080d15');
+    this.input.mouse?.disableContextMenu();
     this.layout();
     this.scale.on(Phaser.Scale.Events.RESIZE, this.layout, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -61,10 +85,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   // Rebuild the whole scene sized to the current viewport. Called on create and
-  // on every window resize so the map always fills the window.
+  // on every window resize so the map always fills the window. Unit movement and
+  // combat state (unitRuntime) survives across rebuilds; only visuals are recreated.
   private layout(): void {
     this.children.removeAll(true);
-    this.unitGeometry.clear();
+    this.unitViews.clear();
+    this.baseViews.clear();
     this.selectedUnitBody = undefined;
     this.selectedUnitMarker = undefined;
     this.statsPanelText = undefined;
@@ -112,41 +138,67 @@ export class GameScene extends Phaser.Scene {
     const colors = BASE_COLORS[base.faction];
     const inset = this.tileSize * 0.6;
 
-    this.add
+    const rect = this.add
       .rectangle(position.x, position.y, width, height, colors.fill, 0.92)
       .setOrigin(0)
-      .setStrokeStyle(3, colors.stroke, 0.86);
+      .setStrokeStyle(3, colors.stroke, 0.86)
+      .setInteractive(new Phaser.Geom.Rectangle(0, 0, width, height), Phaser.Geom.Rectangle.Contains);
 
     this.add.rectangle(position.x + width / 2, position.y + height / 2, width - inset, height - inset, colors.inner, 0.78);
     this.add.text(position.x + 16, position.y + 14, base.name, this.getLabelStyle('#f6f7fb', '18px'));
-    this.add.text(position.x + 16, position.y + 42, `HP ${base.health}`, this.getLabelStyle('#c8d8f3', '13px'));
+    const hpText = this.add.text(position.x + 16, position.y + 42, `HP ${base.health}`, this.getLabelStyle('#c8d8f3', '13px'));
+
+    this.baseViews.set(base.id, { base, hpText });
+
+    rect.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.rightButtonDown()) this.orderAttack(base);
+    });
   }
 
   private drawUnit(unit: UnitState): void {
-    const center = this.tileCenterToWorld(unit.position);
+    let runtime = this.unitRuntime.get(unit.id);
+    if (!runtime) {
+      runtime = { cx: unit.position.x + 0.5, cy: unit.position.y + 0.5, attackTimer: 0 };
+      this.unitRuntime.set(unit.id, runtime);
+    }
+
+    const px = this.originX + runtime.cx * this.tileSize;
+    const py = this.originY + runtime.cy * this.tileSize;
     const radius = this.tileSize * 0.28;
     const role = unit.config.role;
 
     const body = this.add
-      .circle(center.x, center.y, radius, UNIT_COLORS[role])
+      .circle(px, py, radius, UNIT_COLORS[role])
       .setStrokeStyle(3, 0x0a1020, 0.8)
       .setInteractive({ useHandCursor: true });
 
-    body.on('pointerdown', () => this.selectUnit(unit));
+    const initial = this.add
+      .text(px, py - 7, this.getUnitInitial(unit), this.getLabelStyle('#08111f', '16px'))
+      .setOrigin(0.5);
+    const roleLabel = this.add
+      .text(px, py + radius + 8, role, this.getLabelStyle('#dbe7ff', '12px'))
+      .setOrigin(0.5, 0);
+
+    this.unitViews.set(unit.id, { body, initial, roleLabel, radius });
+
+    body.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (pointer.rightButtonDown()) return;
+      this.selectUnit(unit);
+    });
     body.on('pointerover', () => body.setStrokeStyle(3, 0xf6f7fb, 0.9));
     body.on('pointerout', () => {
       if (this.selectedUnitId !== unit.id) body.setStrokeStyle(3, 0x0a1020, 0.8);
     });
-
-    this.unitGeometry.set(unit.id, { center, radius, body });
-
-    this.add.text(center.x, center.y - 7, this.getUnitInitial(unit), this.getLabelStyle('#08111f', '16px')).setOrigin(0.5);
-    this.add.text(center.x, center.y + radius + 8, role, this.getLabelStyle('#dbe7ff', '12px')).setOrigin(0.5, 0);
   }
 
   private drawHud(): void {
     const { height } = this.scale.gameSize;
-    this.add.text(HUD_MARGIN, height - 30, 'Click a unit to inspect prototype combat stats.', this.getLabelStyle('#aeb8cc', '14px'));
+    this.add.text(
+      HUD_MARGIN,
+      height - 30,
+      'Click a unit to select it, then right-click a base to march in and attack.',
+      this.getLabelStyle('#aeb8cc', '14px'),
+    );
   }
 
   private drawStatsPanel(): void {
@@ -164,40 +216,112 @@ export class GameScene extends Phaser.Scene {
   }
 
   private selectUnit(unit: UnitState): void {
-    const geometry = this.unitGeometry.get(unit.id);
-    if (!geometry) return;
-    const { center, radius, body } = geometry;
+    const view = this.unitViews.get(unit.id);
+    const runtime = this.unitRuntime.get(unit.id);
+    if (!view || !runtime) return;
 
     this.selectedUnitBody?.setStrokeStyle(3, 0x0a1020, 0.8);
     this.selectedUnitId = unit.id;
-    this.selectedUnitBody = body;
+    this.selectedUnitBody = view.body;
+
+    const px = this.originX + runtime.cx * this.tileSize;
+    const py = this.originY + runtime.cy * this.tileSize;
+
     this.selectedUnitMarker?.destroy();
-    this.selectedUnitMarker = this.add.circle(center.x, center.y, radius + 8, 0xffffff, 0).setStrokeStyle(3, 0xf6f7fb, 0.95);
-    body.setStrokeStyle(3, 0xf6f7fb, 0.95);
+    this.selectedUnitMarker = this.add.circle(px, py, view.radius + 8, 0xffffff, 0).setStrokeStyle(3, 0xf6f7fb, 0.95);
+    view.body.setStrokeStyle(3, 0xf6f7fb, 0.95);
 
     const { stats } = unit.config;
 
     this.statsPanelText?.setText([
       `${unit.name} - ${unit.config.role}`,
       `Speed: ${stats.speed}`,
+      `Range: ${stats.range}`,
       `HP: ${stats.hp}`,
       `Power: ${stats.power}`,
     ]);
+  }
+
+  // Order the currently selected unit to march toward `base` and attack it.
+  private orderAttack(base: BaseState): void {
+    if (!this.selectedUnitId) return;
+    const runtime = this.unitRuntime.get(this.selectedUnitId);
+    if (!runtime) return;
+
+    runtime.targetBase = base;
+    runtime.attackTimer = 0;
+  }
+
+  update(_time: number, delta: number): void {
+    this.world.units.forEach((unit) => {
+      const runtime = this.unitRuntime.get(unit.id);
+      if (!runtime || !runtime.targetBase) return;
+
+      const base = runtime.targetBase;
+      const left = base.position.x;
+      const top = base.position.y;
+      const right = base.position.x + base.size.x;
+      const bottom = base.position.y + base.size.y;
+
+      // Nearest point on the base's footprint, in grid units.
+      const nearestX = Phaser.Math.Clamp(runtime.cx, left, right);
+      const nearestY = Phaser.Math.Clamp(runtime.cy, top, bottom);
+      const dx = nearestX - runtime.cx;
+      const dy = nearestY - runtime.cy;
+      const distance = Math.hypot(dx, dy);
+      const range = unit.config.stats.range;
+
+      if (distance > range) {
+        const step = unit.config.stats.speed * SPEED_TILES_PER_SEC * (delta / 1000);
+        const travel = Math.min(step, distance - range);
+        runtime.cx += (dx / distance) * travel;
+        runtime.cy += (dy / distance) * travel;
+        this.updateUnitPosition(unit.id);
+      } else {
+        this.attackBase(unit, runtime, delta);
+      }
+    });
+  }
+
+  private updateUnitPosition(unitId: string): void {
+    const view = this.unitViews.get(unitId);
+    const runtime = this.unitRuntime.get(unitId);
+    if (!view || !runtime) return;
+
+    const px = this.originX + runtime.cx * this.tileSize;
+    const py = this.originY + runtime.cy * this.tileSize;
+
+    view.body.setPosition(px, py);
+    view.initial.setPosition(px, py - 7);
+    view.roleLabel.setPosition(px, py + view.radius + 8);
+    if (this.selectedUnitId === unitId) {
+      this.selectedUnitMarker?.setPosition(px, py);
+    }
+  }
+
+  private attackBase(unit: UnitState, runtime: UnitRuntime, delta: number): void {
+    const base = runtime.targetBase;
+    if (!base) return;
+
+    if (base.health <= 0) {
+      runtime.targetBase = undefined;
+      return;
+    }
+
+    runtime.attackTimer -= delta;
+    if (runtime.attackTimer > 0) return;
+    runtime.attackTimer = ATTACK_INTERVAL_MS;
+
+    base.health = Math.max(0, base.health - unit.config.stats.power);
+    this.baseViews.get(base.id)?.hpText.setText(`HP ${base.health}`);
+
+    if (base.health <= 0) runtime.targetBase = undefined;
   }
 
   private tileToWorld(point: GridPoint): GridPoint {
     return {
       x: this.originX + point.x * this.tileSize,
       y: this.originY + point.y * this.tileSize,
-    };
-  }
-
-  private tileCenterToWorld(point: GridPoint): GridPoint {
-    const position = this.tileToWorld(point);
-
-    return {
-      x: position.x + this.tileSize / 2,
-      y: position.y + this.tileSize / 2,
     };
   }
 
