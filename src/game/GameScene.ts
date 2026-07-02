@@ -27,6 +27,12 @@ interface UnitView {
   initial: Phaser.GameObjects.Text;
   roleLabel: Phaser.GameObjects.Text;
   radius: number;
+  // A small health bar floating above the unit: a dark backing and a colored
+  // fill whose width tracks current/max HP (see updateUnitHealthBar).
+  hpBarBg: Phaser.GameObjects.Rectangle;
+  hpBarFill: Phaser.GameObjects.Rectangle;
+  hpBarWidth: number;
+  maxHp: number;
 }
 
 interface BaseView {
@@ -77,8 +83,10 @@ const HUD_MARGIN = 24;
 
 // A unit's `speed` stat is interpreted as this many tiles travelled per second.
 const SPEED_TILES_PER_SEC = 0.5;
-// How often an in-range unit lands a hit on a base (milliseconds).
+// How often an in-range unit lands a hit on a base or another unit (ms).
 const ATTACK_INTERVAL_MS = 700;
+// Height of the floating per-unit health bar, in screen pixels.
+const UNIT_HP_BAR_HEIGHT = 5;
 // How often an in-range Collector pulls resource from a node (milliseconds).
 const COLLECT_INTERVAL_MS = 700;
 
@@ -229,10 +237,13 @@ export class GameScene extends Phaser.Scene implements GameContext {
   }
 
   getAttackTarget(targetId: string): AttackTarget | undefined {
-    // Only bases are attackable in the current sim; units become targets once
-    // the update loop supports unit-vs-unit combat.
+    // Bases and units are both attackable. Ids don't collide (base-* vs unit-*),
+    // so resolve whichever matches; the sim handles each target kind.
     const base = this.gameState.getBase(targetId);
-    return base ? { id: base.id, name: base.name, kind: 'base' } : undefined;
+    if (base) return { id: base.id, name: base.name, kind: 'base' };
+    const unit = this.gameState.getUnit(targetId);
+    if (unit) return { id: unit.id, name: unit.name, kind: 'unit' };
+    return undefined;
   }
 
   issueAttackOrder(unitId: string, targetId: string): void {
@@ -539,10 +550,38 @@ export class GameScene extends Phaser.Scene implements GameContext {
       .text(px, py + radius + 8, role, this.getLabelStyle('#dbe7ff', '12px'))
       .setOrigin(0.5, 0);
 
-    this.unitViews.set(unit.id, { body, initial, roleLabel, radius });
+    // Health bar floating just above the unit. The fill is left-anchored so it
+    // shrinks toward the left as HP drops; updateUnitHealthBar sets its width.
+    const barWidth = radius * 2;
+    const barY = py - radius - 12;
+    const hpBarBg = this.add
+      .rectangle(px, barY, barWidth, UNIT_HP_BAR_HEIGHT, 0x0a1020, 0.85)
+      .setOrigin(0.5)
+      .setStrokeStyle(1, 0x000000, 0.5);
+    const hpBarFill = this.add
+      .rectangle(px - barWidth / 2, barY, barWidth, UNIT_HP_BAR_HEIGHT, healthBarColor(1))
+      .setOrigin(0, 0.5);
+
+    this.unitViews.set(unit.id, {
+      body,
+      initial,
+      roleLabel,
+      radius,
+      hpBarBg,
+      hpBarFill,
+      hpBarWidth: barWidth,
+      maxHp: unit.config.stats.hp,
+    });
+    // Reflect current HP right away (a mid-combat resize rebuilds views).
+    this.updateUnitHealthBar(unit.id);
 
     body.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (pointer.rightButtonDown()) return;
+      // Right-clicking an enemy unit orders the selected unit to attack it,
+      // mirroring a right-click on an enemy base. Left-click selects.
+      if (pointer.rightButtonDown()) {
+        if (!this.isHumanUnit(unit)) this.orderAttackUnit(unit);
+        return;
+      }
       this.selectUnit(unit);
     });
     body.on('pointerover', () => body.setStrokeStyle(3, 0xf6f7fb, 0.9));
@@ -595,13 +634,19 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.uiCamera?.ignore(this.selectedUnitMarker);
     view.body.setStrokeStyle(3, 0xf6f7fb, 0.95);
 
-    const { stats } = unit.config;
+    this.setStatsPanelFor(unit);
+  }
 
+  // Populate the "Selected Unit" panel for `unit`, showing its live HP against
+  // the max. Called on select and again whenever the selected unit takes damage.
+  private setStatsPanelFor(unit: UnitState): void {
+    const { stats } = unit.config;
+    const hp = this.gameState.getUnitHealth(unit.id) ?? stats.hp;
     this.statsPanelText?.setText([
       `${unit.name} - ${unit.config.role}`,
       `Speed: ${stats.speed}`,
       `Range: ${stats.range}`,
-      `HP: ${stats.hp}`,
+      `HP: ${hp}/${stats.hp}`,
       `Power: ${stats.power}`,
     ]);
   }
@@ -615,6 +660,24 @@ export class GameScene extends Phaser.Scene implements GameContext {
       unitId: this.selectedUnitId,
       targetId: base.id,
     });
+  }
+
+  // Order the currently selected unit to march toward `target` and attack it.
+  // Same door as orderAttack — a right-click on an enemy unit and an LLM `attack`
+  // tool call share one path. No-op if nothing is selected or the selection is
+  // the target itself.
+  private orderAttackUnit(target: UnitState): void {
+    if (!this.selectedUnitId || this.selectedUnitId === target.id) return;
+    this.interfaceFor(this.humanPlayerId).invoke('attack', {
+      unitId: this.selectedUnitId,
+      targetId: target.id,
+    });
+  }
+
+  // Whether `unit` belongs to the human player's faction — used to keep the
+  // right-click-to-attack gesture from firing on the player's own units.
+  private isHumanUnit(unit: UnitState): boolean {
+    return this.playerOwnsUnit(this.humanPlayerId, unit.id);
   }
 
   // Order the currently selected unit to gather from `node`. Routed through the
@@ -657,6 +720,10 @@ export class GameScene extends Phaser.Scene implements GameContext {
       else if (order.kind === 'collect') this.advanceCollect(unit, order.nodeId, delta);
     });
 
+    // Reap units killed this frame after the order pass, so we never mutate the
+    // unit list mid-iteration above.
+    this.reapDeadUnits();
+
     const outcome = this.gameState.getOutcome();
     if (outcome) this.endGame(outcome);
   }
@@ -670,12 +737,31 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.onGameOver?.(outcome);
   }
 
-  // Path toward the attack target and start hitting it once within range.
+  // Path toward the attack target and start hitting it once within range. The
+  // target is either a base (fixed footprint) or another unit (a moving point);
+  // if it no longer exists the attacker stands down.
   private advanceAttack(unit: UnitState, targetId: string, delta: number): void {
-    const base = this.gameState.getBase(targetId);
     const pos = this.gameState.getUnitPosition(unit.id);
-    if (!base || !pos) return;
+    if (!pos) return;
 
+    const base = this.gameState.getBase(targetId);
+    if (base) {
+      this.advanceAttackBase(unit, base, pos, delta);
+      return;
+    }
+
+    const target = this.gameState.getUnit(targetId);
+    if (target) {
+      this.advanceAttackUnit(unit, target, pos, delta);
+      return;
+    }
+
+    // Target is gone (a destroyed unit's id no longer resolves). Stand down.
+    this.gameState.clearOrder(unit.id);
+  }
+
+  // Close on a base's footprint, then hammer it once in range.
+  private advanceAttackBase(unit: UnitState, base: BaseState, pos: GridPoint, delta: number): void {
     if (base.health <= 0) {
       this.gameState.clearOrder(unit.id);
       return;
@@ -701,6 +787,31 @@ export class GameScene extends Phaser.Scene implements GameContext {
       this.updateUnitPosition(unit.id);
     } else {
       this.attackBase(unit, base, delta);
+    }
+  }
+
+  // Chase a target unit's live center, then strike it once in range. Mirrors the
+  // base case, but the target is a moving point rather than a fixed footprint.
+  private advanceAttackUnit(unit: UnitState, target: UnitState, pos: GridPoint, delta: number): void {
+    const targetPos = this.gameState.getUnitPosition(target.id);
+    const targetHp = this.gameState.getUnitHealth(target.id);
+    if (!targetPos || targetHp === undefined || targetHp <= 0) {
+      this.gameState.clearOrder(unit.id);
+      return;
+    }
+
+    const dx = targetPos.x - pos.x;
+    const dy = targetPos.y - pos.y;
+    const distance = Math.hypot(dx, dy);
+    const range = unit.config.stats.range;
+
+    if (distance > range) {
+      const step = unit.config.stats.speed * SPEED_TILES_PER_SEC * (delta / 1000);
+      const travel = Math.min(step, distance - range);
+      this.gameState.setUnitPosition(unit.id, pos.x + (dx / distance) * travel, pos.y + (dy / distance) * travel);
+      this.updateUnitPosition(unit.id);
+    } else {
+      this.attackUnit(unit, target, delta);
     }
   }
 
@@ -812,9 +923,24 @@ export class GameScene extends Phaser.Scene implements GameContext {
     view.body.setPosition(px, py);
     view.initial.setPosition(px, py - 7);
     view.roleLabel.setPosition(px, py + view.radius + 8);
+    const barY = py - view.radius - 12;
+    view.hpBarBg.setPosition(px, barY);
+    view.hpBarFill.setPosition(px - view.hpBarWidth / 2, barY);
     if (this.selectedUnitId === unitId) {
       this.selectedUnitMarker?.setPosition(px, py);
     }
+  }
+
+  // Resize/recolor a unit's health bar fill to match its current HP. Left-
+  // anchored, so the bar drains toward the left; color shifts green→yellow→red.
+  private updateUnitHealthBar(unitId: string): void {
+    const view = this.unitViews.get(unitId);
+    const hp = this.gameState.getUnitHealth(unitId);
+    if (!view || hp === undefined) return;
+
+    const ratio = Phaser.Math.Clamp(hp / view.maxHp, 0, 1);
+    view.hpBarFill.setSize(view.hpBarWidth * ratio, UNIT_HP_BAR_HEIGHT);
+    view.hpBarFill.setFillStyle(healthBarColor(ratio));
   }
 
   private attackBase(unit: UnitState, base: BaseState, delta: number): void {
@@ -830,6 +956,64 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.baseViews.get(base.id)?.hpText.setText(`HP ${health}`);
 
     if (health <= 0) this.gameState.clearOrder(unit.id);
+  }
+
+  // Land a hit on a target unit on the shared attack cadence, updating its health
+  // bar (and the stats panel if it's the selected unit). The dead unit is reaped
+  // after the frame's order pass (see reapDeadUnits), not here.
+  private attackUnit(unit: UnitState, target: UnitState, delta: number): void {
+    let timer = (this.attackTimers.get(unit.id) ?? 0) - delta;
+    if (timer > 0) {
+      this.attackTimers.set(unit.id, timer);
+      return;
+    }
+    timer = ATTACK_INTERVAL_MS;
+    this.attackTimers.set(unit.id, timer);
+
+    const hp = this.gameState.damageUnit(target.id, unit.config.stats.power);
+    this.updateUnitHealthBar(target.id);
+    if (this.selectedUnitId === target.id) this.setStatsPanelFor(target);
+
+    if (hp <= 0) this.gameState.clearOrder(unit.id);
+  }
+
+  // Remove any units that hit 0 HP this frame — clear their visuals, drop them
+  // from the sim, and deselect if one was the selected unit.
+  private reapDeadUnits(): void {
+    for (const unit of [...this.gameState.getUnits()]) {
+      const hp = this.gameState.getUnitHealth(unit.id);
+      if (hp !== undefined && hp <= 0) this.destroyUnit(unit.id);
+    }
+  }
+
+  // Tear down a single unit: its view, any per-unit timers, its selection state,
+  // and finally its entry in the authoritative game state.
+  private destroyUnit(unitId: string): void {
+    this.destroyUnitView(unitId);
+    this.attackTimers.delete(unitId);
+    this.collectTimers.delete(unitId);
+
+    if (this.selectedUnitId === unitId) {
+      this.selectedUnitId = undefined;
+      this.selectedUnitBody = undefined;
+      this.selectedUnitMarker?.destroy();
+      this.selectedUnitMarker = undefined;
+      this.statsPanelText?.setText('None selected');
+    }
+
+    this.gameState.removeUnit(unitId);
+  }
+
+  // Destroy and forget the Phaser objects backing a unit.
+  private destroyUnitView(unitId: string): void {
+    const view = this.unitViews.get(unitId);
+    if (!view) return;
+    view.body.destroy();
+    view.initial.destroy();
+    view.roleLabel.destroy();
+    view.hpBarBg.destroy();
+    view.hpBarFill.destroy();
+    this.unitViews.delete(unitId);
   }
 
   private collectFromNode(unit: UnitState, node: ResourceNodeState, delta: number): void {
@@ -881,4 +1065,12 @@ function resourceLabel(resource: ResourceKind): string {
     default:
       return resource;
   }
+}
+
+// Health-bar fill color for a remaining-HP ratio: green when healthy, yellow
+// when hurt, red when nearly dead.
+function healthBarColor(ratio: number): number {
+  if (ratio > 0.5) return 0x4ade80;
+  if (ratio > 0.25) return 0xfacc15;
+  return 0xef4444;
 }

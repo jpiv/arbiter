@@ -8,14 +8,16 @@ export interface AttackArgs extends Record<string, unknown> {
 /**
  * Order a unit to march toward a target and attack it once in range. This wraps
  * the existing path + attack loop; the unit keeps attacking until the target is
- * destroyed or a new order replaces it.
+ * destroyed or a new order replaces it. Targets may be an enemy base or an enemy
+ * unit — the unit chases a moving unit target and strikes it once in range.
  */
 export const attackAction: GameAction<AttackArgs> = {
   name: 'attack',
   description:
-    'Order a unit to move toward a target and attack it once within range. The unit ' +
-    'paths to the target automatically and keeps attacking until the target is ' +
-    'destroyed or the unit receives a new order.',
+    'Order a unit to move toward a target and attack it once within range. The target ' +
+    'can be an enemy base or an enemy unit; the unit paths to it automatically (chasing ' +
+    'a unit that moves) and keeps attacking until the target is destroyed or the unit ' +
+    'receives a new order.',
   parameters: {
     type: 'object',
     properties: {
@@ -25,7 +27,9 @@ export const attackAction: GameAction<AttackArgs> = {
       },
       targetId: {
         type: 'string',
-        description: 'ID of the target to attack, e.g. an enemy base like "base-omega".',
+        description:
+          'ID of the target to attack — an enemy base like "base-omega" or an enemy unit ' +
+          'like "unit-enemy-soldier-1".',
       },
     },
     required: ['unitId', 'targetId'],
@@ -36,6 +40,7 @@ export const attackAction: GameAction<AttackArgs> = {
 
     if (!unitId) return fail('An "unitId" is required to issue an attack order.');
     if (!targetId) return fail('A "targetId" is required to issue an attack order.');
+    if (unitId === targetId) return fail('A unit cannot attack itself.');
 
     const unit = context.getUnit(unitId);
     if (!unit) return fail(`No unit found with id "${unitId}".`);

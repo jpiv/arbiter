@@ -10,9 +10,12 @@ import {
 
 // Live, mutating state for a single unit. Position is the unit's center in
 // fractional grid coordinates so movement is smooth and tile-size independent.
+// `hp` is current health (config.stats.hp is the max it starts at); it drops as
+// the unit takes damage in combat and the unit is removed once it hits 0.
 interface UnitLive {
   x: number;
   y: number;
+  hp: number;
   order: UnitOrder;
 }
 
@@ -41,6 +44,7 @@ export class GameState {
       this.live.set(unit.id, {
         x: unit.position.x + 0.5,
         y: unit.position.y + 0.5,
+        hp: unit.config.stats.hp,
         order: { kind: 'idle' },
       });
     }
@@ -80,6 +84,11 @@ export class GameState {
   getUnitPosition(unitId: string): { x: number; y: number } | undefined {
     const live = this.live.get(unitId);
     return live ? { x: live.x, y: live.y } : undefined;
+  }
+
+  /** Current health of a unit, or undefined if it no longer exists. */
+  getUnitHealth(unitId: string): number | undefined {
+    return this.live.get(unitId)?.hp;
   }
 
   getUnitOrder(unitId: string): UnitOrder {
@@ -140,6 +149,25 @@ export class GameState {
   }
 
   /**
+   * Apply damage to a unit and return its remaining health (0 if it was just
+   * killed). Returns 0 for a missing unit too. The caller reaps units that reach
+   * 0 HP via {@link removeUnit}; this only mutates health.
+   */
+  damageUnit(unitId: string, amount: number): number {
+    const live = this.live.get(unitId);
+    if (!live) return 0;
+    live.hp = Math.max(0, live.hp - amount);
+    return live.hp;
+  }
+
+  /** Remove a unit from the world entirely (used when it is destroyed). */
+  removeUnit(unitId: string): void {
+    const index = this.units.findIndex((unit) => unit.id === unitId);
+    if (index >= 0) this.units.splice(index, 1);
+    this.live.delete(unitId);
+  }
+
+  /**
    * Mine up to `amount` from a node, capped by its remaining reserve. Returns how
    * much was actually extracted (0 if the node is missing or already depleted) so
    * the caller can credit exactly that to the collecting player.
@@ -179,6 +207,8 @@ export class GameState {
           x: live ? Math.floor(live.x) : unit.position.x,
           y: live ? Math.floor(live.y) : unit.position.y,
         },
+        // Current health; stats.hp carries the max it started at.
+        hp: live ? live.hp : unit.config.stats.hp,
         stats: { ...unit.config.stats },
         order: live ? live.order : { kind: 'idle' },
       };
@@ -242,7 +272,7 @@ export class GameState {
     for (const unit of snapshot.units) {
       lines.push(
         `- ${unit.name} [${unit.id}] — ${unit.faction} ${unit.role}, at [${unit.position.x},${unit.position.y}] — ` +
-          `HP ${unit.stats.hp}, power ${unit.stats.power}, range ${unit.stats.range}, speed ${unit.stats.speed} — ` +
+          `HP ${unit.hp}/${unit.stats.hp}, power ${unit.stats.power}, range ${unit.stats.range}, speed ${unit.stats.speed} — ` +
           `${describeOrder(unit.order)}`,
       );
     }
