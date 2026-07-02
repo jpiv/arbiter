@@ -36,6 +36,8 @@ export interface UnitSnapshot {
   faction: Faction;
   ownerId: string;
   position: { x: number; y: number };
+  // Current health; `stats.hp` is the max it started with.
+  hp: number;
   stats: UnitStats;
   order: UnitOrder;
 }

@@ -19,7 +19,7 @@ export interface JsonSchemaProperty {
   description?: string;
 }
 
-/** Something a unit can be ordered to attack. Bases today; units later. */
+/** Something a unit can be ordered to attack — an enemy base or an enemy unit. */
 export interface AttackTarget {
   id: string;
   name: string;
@@ -51,7 +51,7 @@ export interface Actor {
 export interface GameContext {
   /** Look up a unit by id, or undefined if none exists. */
   getUnit(unitId: string): UnitState | undefined;
-  /** Resolve an attack target by id, or undefined if it isn't attackable. */
+  /** Resolve an attack target (base or unit) by id, or undefined if none exists. */
   getAttackTarget(targetId: string): AttackTarget | undefined;
   /** Order `unitId` to path toward `targetId` and attack once in range. */
   issueAttackOrder(unitId: string, targetId: string): void;
