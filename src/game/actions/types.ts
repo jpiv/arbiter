@@ -38,6 +38,10 @@ export interface GameContext {
   getAttackTarget(targetId: string): AttackTarget | undefined;
   /** Order `unitId` to path toward `targetId` and attack once in range. */
   issueAttackOrder(unitId: string, targetId: string): void;
+  /** The map's grid dimensions, so actions can keep destinations in bounds. */
+  getMapBounds(): { columns: number; rows: number };
+  /** Order `unitId` to path to the grid tile at column `tileX`, row `tileY`. */
+  issueMoveOrder(unitId: string, tileX: number, tileY: number): void;
 }
 
 /**

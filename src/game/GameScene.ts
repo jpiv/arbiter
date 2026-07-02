@@ -116,10 +116,22 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.attackTimers.set(unitId, 0);
   }
 
+  getMapBounds(): { columns: number; rows: number } {
+    const map = this.gameState.getMap();
+    return { columns: map.columns, rows: map.rows };
+  }
+
+  issueMoveOrder(unitId: string, tileX: number, tileY: number): void {
+    // orderMove replaces whatever order the unit had, so a move automatically
+    // supersedes any attack (and vice versa) — the two are mutually exclusive.
+    this.gameState.orderMove(unitId, tileX, tileY);
+  }
+
   create(): void {
     this.cameras.main.setBackgroundColor('#080d15');
     this.input.mouse?.disableContextMenu();
     this.setupPanControls();
+    this.setupUnitOrders();
     this.layout();
 
     // Start looking at the player's own base rather than the map's top-left corner.
@@ -181,6 +193,19 @@ export class GameScene extends Phaser.Scene implements GameContext {
       this.pointerInWindow = false;
       this.isDragPanning = false;
     });
+  }
+
+  // Right-click on empty terrain to move the selected unit there. Right-clicks
+  // over a base or unit are left to those objects' own handlers (attack/select),
+  // so `currentlyOver` being empty is what distinguishes a bare-ground order.
+  private setupUnitOrders(): void {
+    this.input.on(
+      Phaser.Input.Events.POINTER_DOWN,
+      (pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
+        if (!pointer.rightButtonDown() || currentlyOver.length > 0) return;
+        this.orderMoveToPointer(pointer);
+      },
+    );
   }
 
   // Rebuild the whole scene sized to the current viewport. Called on create and
@@ -296,7 +321,7 @@ export class GameScene extends Phaser.Scene implements GameContext {
       .text(
         HUD_MARGIN,
         height - 52,
-        'Click a unit to select it, then right-click a base to march in and attack.',
+        'Click a unit to select it, then right-click ground to move there or a base to attack.',
         this.getLabelStyle('#aeb8cc', '14px'),
       )
       .setScrollFactor(0);
@@ -365,44 +390,81 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.gameInterface.invoke('attack', { unitId: this.selectedUnitId, targetId: base.id });
   }
 
+  // Order the currently selected unit to the grid tile under the pointer. Like
+  // orderAttack, this goes through the game interface so a right-click and an LLM
+  // `move` tool call share the exact same path.
+  private orderMoveToPointer(pointer: Phaser.Input.Pointer): void {
+    if (!this.selectedUnitId) return;
+    const tileX = Math.floor((pointer.worldX - this.originX) / this.tileSize);
+    const tileY = Math.floor((pointer.worldY - this.originY) / this.tileSize);
+    this.gameInterface.invoke('move', { unitId: this.selectedUnitId, x: tileX, y: tileY });
+  }
+
   update(_time: number, delta: number): void {
     this.updatePan(delta);
 
     this.gameState.getUnits().forEach((unit) => {
       const order = this.gameState.getUnitOrder(unit.id);
-      if (order.kind !== 'attack') return;
-
-      const base = this.gameState.getBase(order.targetId);
-      const pos = this.gameState.getUnitPosition(unit.id);
-      if (!base || !pos) return;
-
-      if (base.health <= 0) {
-        this.gameState.clearOrder(unit.id);
-        return;
-      }
-
-      const left = base.position.x;
-      const top = base.position.y;
-      const right = base.position.x + base.size.x;
-      const bottom = base.position.y + base.size.y;
-
-      // Nearest point on the base's footprint, in grid units.
-      const nearestX = Phaser.Math.Clamp(pos.x, left, right);
-      const nearestY = Phaser.Math.Clamp(pos.y, top, bottom);
-      const dx = nearestX - pos.x;
-      const dy = nearestY - pos.y;
-      const distance = Math.hypot(dx, dy);
-      const range = unit.config.stats.range;
-
-      if (distance > range) {
-        const step = unit.config.stats.speed * SPEED_TILES_PER_SEC * (delta / 1000);
-        const travel = Math.min(step, distance - range);
-        this.gameState.setUnitPosition(unit.id, pos.x + (dx / distance) * travel, pos.y + (dy / distance) * travel);
-        this.updateUnitPosition(unit.id);
-      } else {
-        this.attackBase(unit, base, delta);
-      }
+      // A unit carries out at most one order per frame; idle units do nothing.
+      if (order.kind === 'attack') this.advanceAttack(unit, order.targetId, delta);
+      else if (order.kind === 'move') this.advanceMove(unit, order.x, order.y, delta);
     });
+  }
+
+  // Path toward the attack target and start hitting it once within range.
+  private advanceAttack(unit: UnitState, targetId: string, delta: number): void {
+    const base = this.gameState.getBase(targetId);
+    const pos = this.gameState.getUnitPosition(unit.id);
+    if (!base || !pos) return;
+
+    if (base.health <= 0) {
+      this.gameState.clearOrder(unit.id);
+      return;
+    }
+
+    const left = base.position.x;
+    const top = base.position.y;
+    const right = base.position.x + base.size.x;
+    const bottom = base.position.y + base.size.y;
+
+    // Nearest point on the base's footprint, in grid units.
+    const nearestX = Phaser.Math.Clamp(pos.x, left, right);
+    const nearestY = Phaser.Math.Clamp(pos.y, top, bottom);
+    const dx = nearestX - pos.x;
+    const dy = nearestY - pos.y;
+    const distance = Math.hypot(dx, dy);
+    const range = unit.config.stats.range;
+
+    if (distance > range) {
+      const step = unit.config.stats.speed * SPEED_TILES_PER_SEC * (delta / 1000);
+      const travel = Math.min(step, distance - range);
+      this.gameState.setUnitPosition(unit.id, pos.x + (dx / distance) * travel, pos.y + (dy / distance) * travel);
+      this.updateUnitPosition(unit.id);
+    } else {
+      this.attackBase(unit, base, delta);
+    }
+  }
+
+  // Walk toward the destination tile's center; snap onto it and go idle once
+  // within a single frame's step of arriving.
+  private advanceMove(unit: UnitState, tileX: number, tileY: number, delta: number): void {
+    const pos = this.gameState.getUnitPosition(unit.id);
+    if (!pos) return;
+
+    const targetX = tileX + 0.5;
+    const targetY = tileY + 0.5;
+    const dx = targetX - pos.x;
+    const dy = targetY - pos.y;
+    const distance = Math.hypot(dx, dy);
+    const step = unit.config.stats.speed * SPEED_TILES_PER_SEC * (delta / 1000);
+
+    if (distance <= step || distance === 0) {
+      this.gameState.setUnitPosition(unit.id, targetX, targetY);
+      this.gameState.clearOrder(unit.id);
+    } else {
+      this.gameState.setUnitPosition(unit.id, pos.x + (dx / distance) * step, pos.y + (dy / distance) * step);
+    }
+    this.updateUnitPosition(unit.id);
   }
 
   // Poll keyboard and screen-edge input each frame and scroll the camera.

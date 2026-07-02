@@ -83,6 +83,11 @@ export class GameState {
     if (live) live.order = { kind: 'attack', targetId };
   }
 
+  orderMove(unitId: string, tileX: number, tileY: number): void {
+    const live = this.live.get(unitId);
+    if (live) live.order = { kind: 'move', x: tileX, y: tileY };
+  }
+
   clearOrder(unitId: string): void {
     const live = this.live.get(unitId);
     if (live) live.order = { kind: 'idle' };
@@ -177,6 +182,8 @@ function describeOrder(order: UnitOrder): string {
   switch (order.kind) {
     case 'attack':
       return `attacking ${order.targetId}`;
+    case 'move':
+      return `moving to [${order.x},${order.y}]`;
     case 'idle':
     default:
       return 'idle';
