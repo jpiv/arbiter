@@ -13,6 +13,7 @@ export enum Faction {
 export enum UnitRole {
   Scout = 'Scout',
   Soldier = 'Soldier',
+  RangedSoldier = 'Ranged Soldier',
   Builder = 'Builder',
 }
 
@@ -110,9 +111,21 @@ export const UNIT_CONFIGS: Record<UnitRole, UnitConfig> = {
     role: UnitRole.Soldier,
     stats: {
       speed: 4,
-      range: 2,
+      // Melee: must close to point-blank before it can land a hit.
+      range: 1,
       hp: 120,
       power: 22,
+    },
+  },
+  [UnitRole.RangedSoldier]: {
+    role: UnitRole.RangedSoldier,
+    stats: {
+      speed: 4,
+      // Ranged: strikes from well outside the melee soldier's reach (and the
+      // scout's), trading durability and per-hit punch for that standoff.
+      range: 4,
+      hp: 90,
+      power: 16,
     },
   },
 };
@@ -215,6 +228,13 @@ export const prototypeWorld: WorldState = {
       config: UNIT_CONFIGS[UnitRole.Soldier],
       faction: Faction.Player,
       position: { x: 22, y: 11 },
+    },
+    {
+      id: 'unit-ranged-1',
+      name: 'Ranged 1',
+      config: UNIT_CONFIGS[UnitRole.RangedSoldier],
+      faction: Faction.Player,
+      position: { x: 21, y: 11 },
     },
     {
       id: 'unit-builder-1',
