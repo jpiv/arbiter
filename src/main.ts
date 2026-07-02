@@ -1,7 +1,11 @@
 import Phaser from 'phaser';
 import { GameScene } from './game/GameScene';
 import { AgentPanel } from './ui/agentPanel';
+import { DevConsole } from './ui/devConsole';
 import './styles.css';
+
+// Hold the scene instance so DOM overlays can read live game state through it.
+const scene = new GameScene();
 
 const gameConfig: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -12,10 +16,13 @@ const gameConfig: Phaser.Types.Core.GameConfig = {
     width: '100%',
     height: '100%',
   },
-  scene: [new GameScene()],
+  scene: [scene],
 };
 
 new Phaser.Game(gameConfig);
 
 // Agent panel overlay, layered above the Phaser canvas as regular DOM.
 new AgentPanel().mount();
+
+// Dev console overlay for inspecting the live game state.
+new DevConsole(() => scene.getState()).mount();
