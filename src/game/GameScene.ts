@@ -283,7 +283,6 @@ export class GameScene extends Phaser.Scene implements GameContext {
     this.drawMap(map);
     this.gameState.getBases().forEach((base) => this.drawBase(base));
     this.gameState.getUnits().forEach((unit) => this.drawUnit(unit));
-    this.drawHud();
     this.drawStatsPanel();
     this.applyCameraLayers();
 
@@ -380,30 +379,6 @@ export class GameScene extends Phaser.Scene implements GameContext {
     body.on('pointerout', () => {
       if (this.selectedUnitId !== unit.id) body.setStrokeStyle(3, 0x0a1020, 0.8);
     });
-  }
-
-  private drawHud(): void {
-    const { height } = this.scale.gameSize;
-    this.registerHud(
-      this.add.text(
-        HUD_MARGIN,
-        height - 74,
-        'Click a unit to select it, then right-click ground to move there or a base to attack.',
-        this.getLabelStyle('#aeb8cc', '14px'),
-      ),
-      this.add.text(
-        HUD_MARGIN,
-        height - 52,
-        'Pan: WASD / arrow keys, push the mouse to a screen edge, or drag with the middle mouse button.',
-        this.getLabelStyle('#8592ab', '13px'),
-      ),
-      this.add.text(
-        HUD_MARGIN,
-        height - 30,
-        'Zoom: mouse wheel (toward the cursor) or the + / - keys.',
-        this.getLabelStyle('#8592ab', '13px'),
-      ),
-    );
   }
 
   private drawStatsPanel(): void {

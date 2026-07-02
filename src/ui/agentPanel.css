@@ -1,4 +1,4 @@
-/* In-game agent panel: a right-docked overlay layered above the Phaser canvas. */
+/* In-game agent panel: a left-docked overlay layered above the Phaser canvas. */
 
 .agent-root {
   --agent-bg: rgba(12, 18, 32, 0.94);
@@ -15,7 +15,7 @@
 /* Floating button that opens the panel. */
 .agent-launcher {
   position: absolute;
-  right: 24px;
+  left: 24px;
   bottom: 24px;
   display: flex;
   align-items: center;
@@ -54,7 +54,7 @@
 .agent-panel {
   position: absolute;
   top: 16px;
-  right: 16px;
+  left: 16px;
   bottom: 16px;
   width: 360px;
   max-width: calc(100vw - 32px);
@@ -68,7 +68,7 @@
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
   pointer-events: auto;
   overflow: hidden;
-  transform: translateX(calc(100% + 24px));
+  transform: translateX(calc(-100% - 24px));
   opacity: 0;
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
