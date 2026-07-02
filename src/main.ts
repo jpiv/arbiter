@@ -5,6 +5,7 @@ import { GameScene } from './game/GameScene';
 import { GAME_RULES } from './game/rules';
 import { AgentPanel } from './ui/agentPanel';
 import { DevConsole } from './ui/devConsole';
+import { GameOverScreen, StartMenu } from './ui/menus';
 import './styles.css';
 
 // Hold the scene instance so DOM overlays can read live game state through it.
@@ -74,4 +75,24 @@ const agentLoop = new AgentLoop({
   agentFor: (id) => getAgent(scene.getPlayers().getPlayer(id)?.agentId ?? ''),
   sink: devConsole.agentSink,
 });
-agentLoop.start();
+
+// Match lifecycle overlays. The start menu holds the world idle on load; the
+// battle sim and the autonomous loop only begin once the player chooses to play.
+const startMenu = new StartMenu();
+startMenu.onStart = () => {
+  scene.start();
+  agentLoop.start();
+};
+startMenu.mount();
+
+// When the scene decides the match (player base or all enemy bases at 0 HP), it
+// stops the sim; we halt the autonomous loop too and show the result. "Play
+// Again" reloads for a clean match — the simplest reliable full reset.
+const gameOverScreen = new GameOverScreen();
+gameOverScreen.onPlayAgain = () => window.location.reload();
+gameOverScreen.mount();
+
+scene.onGameOver = (outcome) => {
+  agentLoop.stop();
+  gameOverScreen.show(outcome);
+};

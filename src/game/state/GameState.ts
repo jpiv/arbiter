@@ -1,5 +1,5 @@
-import { BaseState, GameMap, UnitState, WorldState } from '../world';
-import { BaseSnapshot, GameStateSnapshot, UnitOrder, UnitSnapshot } from './types';
+import { BaseState, Faction, GameMap, UnitState, WorldState } from '../world';
+import { BaseSnapshot, GameOutcome, GameStateSnapshot, UnitOrder, UnitSnapshot } from './types';
 
 // Live, mutating state for a single unit. Position is the unit's center in
 // fractional grid coordinates so movement is smooth and tile-size independent.
@@ -67,6 +67,22 @@ export class GameState {
 
   getUnitOrder(unitId: string): UnitOrder {
     return this.live.get(unitId)?.order ?? { kind: 'idle' };
+  }
+
+  /**
+   * The match result if it has been decided, else null. `victory` means every
+   * enemy base is destroyed ("all enemies" down); `defeat` means every player
+   * base is destroyed (the player at 0 HP). Derived purely from base health, so
+   * it stays correct however the bases got there.
+   */
+  getOutcome(): GameOutcome | null {
+    const allDestroyed = (faction: Faction) => {
+      const owned = this.bases.filter((base) => base.faction === faction);
+      return owned.length > 0 && owned.every((base) => base.health <= 0);
+    };
+    if (allDestroyed(Faction.Enemy)) return 'victory';
+    if (allDestroyed(Faction.Player)) return 'defeat';
+    return null;
   }
 
   // --- Mutations (driven by the sim loop and actions) -----------------------

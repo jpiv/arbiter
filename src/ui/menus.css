@@ -1,0 +1,109 @@
+/* Full-screen title and game-over overlays, layered over the Phaser canvas like
+   the agent panel and dev console. The backdrop is semi-transparent and blurred
+   so the map stays faintly visible behind it. */
+
+.screen {
+  position: fixed;
+  inset: 0;
+  /* Above the agent panel and dev console (both z-index 20) so nothing peeks
+     through while a menu is up. */
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 32%, rgba(18, 26, 44, 0.82), rgba(6, 9, 16, 0.92));
+  backdrop-filter: blur(8px);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color: #f6f7fb;
+  opacity: 0;
+  pointer-events: none; /* invisible + click-through until opened */
+  transition: opacity 0.25s ease;
+}
+.screen[data-open='true'] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.screen-card {
+  width: min(440px, 100%);
+  padding: 40px 36px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 18px;
+  border: 1px solid rgba(107, 122, 153, 0.45);
+  border-radius: 18px;
+  background: rgba(12, 18, 32, 0.94);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  transform: translateY(12px) scale(0.98);
+  transition: transform 0.25s ease;
+}
+.screen[data-open='true'] .screen-card {
+  transform: translateY(0) scale(1);
+}
+
+.screen-title {
+  margin: 0;
+  font-size: 44px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+/* Title screen: cool blue gradient wordmark. */
+.screen-start .screen-title {
+  background: linear-gradient(135deg, #8ecae6, #3f6fb5);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+/* Game over: green for victory, red for defeat. */
+.screen-over[data-outcome='victory'] .screen-title {
+  color: #6ee7a8;
+}
+.screen-over[data-outcome='defeat'] .screen-title {
+  color: #ff8f88;
+}
+
+.screen-tagline {
+  margin: 0;
+  max-width: 34ch;
+  font-size: 15px;
+  line-height: 1.55;
+  color: #aeb8cc;
+}
+
+.screen-hints {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #8b97ac;
+}
+
+.screen-btn {
+  margin-top: 8px;
+  padding: 12px 30px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.screen-btn-primary {
+  background: linear-gradient(135deg, #4f83c9, #3f6fb5);
+  color: #f6f7fb;
+  box-shadow: 0 8px 24px rgba(63, 111, 181, 0.45);
+}
+.screen-btn-primary:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+.screen-btn-primary:active {
+  transform: translateY(0);
+}
